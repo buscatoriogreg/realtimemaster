@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Stopwatch circle -->
+    <path
+        android:fillColor="#E94560"
+        android:pathData="M54,20 a34,34 0 1,0 0.001,0 Z"/>
+    <path
+        android:fillColor="#1A1A2E"
+        android:pathData="M54,28 a26,26 0 1,0 0.001,0 Z"/>
+    <!-- Clock hand -->
+    <path
+        android:strokeColor="#E94560"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M54,54 L54,36"/>
+    <path
+        android:strokeColor="#E94560"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M54,54 L66,54"/>
+</vector>

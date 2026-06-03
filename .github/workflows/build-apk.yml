@@ -1,0 +1,124 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'timing-app/**'
+      - '.github/workflows/build-apk.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write   # needed to create GitHub Releases
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Scaffold a clean RN 0.76 project — gives us gradlew, icons, and all
+      # boilerplate without committing generated files to the repo.
+      - name: Scaffold React Native 0.76 project
+        run: npx --yes react-native@0.76.5 init TimingApp --skip-install
+        env:
+          CI: true
+
+      # Overlay every custom file from timing-app/ on top of the scaffold.
+      - name: Overlay custom source files
+        run: |
+          cp timing-app/App.tsx          TimingApp/App.tsx
+          cp timing-app/app.json         TimingApp/app.json
+          cp timing-app/package.json     TimingApp/package.json
+          cp timing-app/index.js         TimingApp/index.js
+          cp timing-app/babel.config.js  TimingApp/babel.config.js
+          cp timing-app/tsconfig.json    TimingApp/tsconfig.json
+          cp timing-app/android/app/src/main/AndroidManifest.xml \
+             TimingApp/android/app/src/main/AndroidManifest.xml
+          cp -r timing-app/android/app/src/main/res/. \
+                TimingApp/android/app/src/main/res/
+          cp timing-app/android/app/src/main/java/com/timingapp/MainActivity.kt \
+             TimingApp/android/app/src/main/java/com/timingapp/MainActivity.kt
+          cp timing-app/android/app/src/main/java/com/timingapp/MainApplication.kt \
+             TimingApp/android/app/src/main/java/com/timingapp/MainApplication.kt
+          cp timing-app/android/build.gradle       TimingApp/android/build.gradle
+          cp timing-app/android/app/build.gradle   TimingApp/android/app/build.gradle
+          cp timing-app/android/gradle.properties  TimingApp/android/gradle.properties
+          cp timing-app/android/settings.gradle    TimingApp/android/settings.gradle
+          cp timing-app/android/app/proguard-rules.pro \
+             TimingApp/android/app/proguard-rules.pro
+
+      - name: Install Node dependencies
+        working-directory: TimingApp
+        run: npm install
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('TimingApp/android/**/*.gradle*', 'TimingApp/android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Generate debug keystore
+        run: |
+          keytool -genkeypair -v \
+            -keystore TimingApp/android/app/debug.keystore \
+            -alias androiddebugkey \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US" 2>/dev/null
+
+      - name: Make gradlew executable
+        run: chmod +x TimingApp/android/gradlew
+
+      - name: Build release APK
+        working-directory: TimingApp/android
+        run: ./gradlew assembleRelease --no-daemon
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8"
+
+      - name: Rename APK
+        run: |
+          APK=$(find TimingApp/android/app/build/outputs/apk/release -name "*.apk" | head -1)
+          cp "$APK" RaceTiming.apk
+
+      # Each build gets a versioned release; make_latest:true keeps
+      # /releases/latest/download/RaceTiming.apk always pointing to newest build.
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: Race Timing App v${{ github.run_number }}
+          body: |
+            Auto-built from `main` — build #${{ github.run_number }}.
+
+            **Direct download:** [RaceTiming.apk](https://github.com/${{ github.repository }}/releases/latest/download/RaceTiming.apk)
+
+            **Install:** enable *Install unknown apps* in Android Settings, then open the APK.
+          files: RaceTiming.apk
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          echo "## ✅ APK Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Release:** v${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Download page:** https://realtimemaster.com/downloads/" >> $GITHUB_STEP_SUMMARY
+          echo "**Direct APK:** https://github.com/${{ github.repository }}/releases/latest/download/RaceTiming.apk" >> $GITHUB_STEP_SUMMARY

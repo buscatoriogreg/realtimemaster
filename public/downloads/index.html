@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Race Timing App — Download</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #1a1a2e;
+      color: #e2e2e2;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 32px 16px 64px;
+    }
+
+    .logo { font-size: 56px; margin-bottom: 8px; }
+    h1   { font-size: 28px; font-weight: 700; letter-spacing: -0.5px; }
+    .sub { color: #888; margin-top: 6px; font-size: 15px; text-align: center; }
+
+    .card {
+      background: #16213e;
+      border: 1px solid #2a2a4a;
+      border-radius: 16px;
+      padding: 28px 24px;
+      margin-top: 32px;
+      width: 100%;
+      max-width: 420px;
+    }
+
+    .download-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      background: #e94560;
+      color: #fff;
+      text-decoration: none;
+      font-size: 18px;
+      font-weight: 700;
+      border-radius: 12px;
+      padding: 18px 24px;
+      transition: opacity .15s;
+    }
+    .download-btn:hover { opacity: .88; }
+    .download-btn svg  { flex-shrink: 0; }
+
+    .meta {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 14px;
+      font-size: 13px;
+      color: #666;
+    }
+    .meta span { color: #aaa; }
+
+    .badge {
+      display: inline-block;
+      background: #0f3460;
+      color: #7ec8e3;
+      font-size: 12px;
+      font-weight: 600;
+      border-radius: 6px;
+      padding: 3px 8px;
+      margin-top: 4px;
+    }
+
+    .section { margin-top: 32px; width: 100%; max-width: 420px; }
+    .section h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: #888; margin-bottom: 12px; }
+
+    ol, ul { padding-left: 20px; }
+    li     { color: #ccc; font-size: 14px; line-height: 1.8; }
+    li strong { color: #e2e2e2; }
+
+    .req-list { list-style: none; padding: 0; }
+    .req-list li {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      font-size: 14px;
+      color: #ccc;
+      padding: 8px 0;
+      border-bottom: 1px solid #2a2a4a;
+    }
+    .req-list li:last-child { border-bottom: none; }
+    .req-list .icon { font-size: 18px; flex-shrink: 0; }
+
+    .qr-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      margin-top: 32px;
+    }
+    #qrcode canvas, #qrcode img { border-radius: 10px; }
+    .qr-label { font-size: 12px; color: #666; }
+
+    footer {
+      margin-top: 48px;
+      font-size: 12px;
+      color: #444;
+      text-align: center;
+    }
+    footer a { color: #555; }
+
+    .spinner {
+      width: 20px; height: 20px;
+      border: 2px solid #333;
+      border-top-color: #e94560;
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      display: inline-block;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+  <div class="logo">⏱</div>
+  <h1>Race Timing App</h1>
+  <p class="sub">Android · Bluetooth beam sensor timing · realtimemaster.com</p>
+
+  <!-- Download card -->
+  <div class="card">
+    <a id="dl-btn" class="download-btn" href="https://github.com/buscatoriogreg/realtimemaster/releases/latest/download/RaceTiming.apk">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="7 10 12 15 17 10"/>
+        <line x1="12" y1="15" x2="12" y2="3"/>
+      </svg>
+      Download APK
+    </a>
+    <div class="meta">
+      <span id="ver-label">Version <span id="ver">…</span></span>
+      <span id="date">…</span>
+    </div>
+    <div id="size-badge" class="badge" style="display:none"></div>
+  </div>
+
+  <!-- Install instructions -->
+  <div class="section">
+    <h2>How to install</h2>
+    <ol>
+      <li>Tap <strong>Download APK</strong> above on your Android device.</li>
+      <li>If prompted, allow downloads from the browser.</li>
+      <li>Open the downloaded file. Android will ask to <strong>Install unknown apps</strong> — tap <em>Settings</em>, enable it, then go back and tap <em>Install</em>.</li>
+      <li>Pair your <strong>HC-05 / HC-06</strong> Bluetooth module in Android Settings before opening the app.</li>
+    </ol>
+  </div>
+
+  <!-- Requirements -->
+  <div class="section">
+    <h2>Requirements</h2>
+    <ul class="req-list">
+      <li><span class="icon">📱</span><div><strong>Android 7.0+</strong><br>API level 24 or higher</div></li>
+      <li><span class="icon">📡</span><div><strong>Classic Bluetooth</strong><br>HC-05 or HC-06 beam sensor module</div></li>
+      <li><span class="icon">🌐</span><div><strong>Wi-Fi (optional)</strong><br>App works offline and syncs when connected to realtimemaster.com</div></li>
+    </ul>
+  </div>
+
+  <!-- QR code (generated client-side) -->
+  <div class="qr-wrap">
+    <p class="qr-label">Scan to open this page on your phone</p>
+    <div id="qrcode"></div>
+  </div>
+
+  <footer>
+    <p>Source & builds: <a href="https://github.com/buscatoriogreg/realtimemaster" target="_blank">github.com/buscatoriogreg/realtimemaster</a></p>
+    <p style="margin-top:4px">realtimemaster.com</p>
+  </footer>
+
+  <!-- QR code library (no external network in prod — served locally) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" crossorigin="anonymous"></script>
+
+  <script>
+    const REPO = 'buscatoriogreg/realtimemaster';
+    const APK_NAME = 'RaceTiming.apk';
+
+    // Fetch latest release metadata from GitHub API
+    fetch(`https://api.github.com/repos/${REPO}/releases/latest`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data) return;
+        document.getElementById('ver').textContent = data.tag_name;
+        document.getElementById('date').textContent =
+          new Date(data.published_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+
+        const asset = (data.assets || []).find(a => a.name === APK_NAME);
+        if (asset) {
+          const mb = (asset.size / 1024 / 1024).toFixed(1);
+          const badge = document.getElementById('size-badge');
+          badge.textContent = `${mb} MB`;
+          badge.style.display = 'inline-block';
+        }
+      })
+      .catch(() => {
+        document.getElementById('ver').textContent = 'latest';
+        document.getElementById('date').textContent = '';
+      });
+
+    // QR code for this page
+    if (window.QRCode) {
+      new QRCode(document.getElementById('qrcode'), {
+        text: window.location.href,
+        width: 160,
+        height: 160,
+        colorDark: '#e2e2e2',
+        colorLight: '#16213e',
+        correctLevel: QRCode.CorrectLevel.M,
+      });
+    }
+  </script>
+</body>
+</html>

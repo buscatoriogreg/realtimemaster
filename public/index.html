@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Socket.IO Basic</title>
+  </head>
+
+<style>
+table {
+    border-collapse: collapse;
+    width: 100%;
+}
+th, td {
+    border: 1px solid #ddd;
+    padding: 8px;
+    text-align: left;
+}
+th {
+    background-color: #4CAF50;
+    color: white;
+}
+tr:hover {background-color: #f5f5f5;}
+</style>
+
+
+  <body>
+    <ul id="messages"></ul>
+
+    <input id="msg" autocomplete="off" placeholder="Type message..." onkeypress="if(event.key==='Enter') sendMsg()" />
+    <button onclick="sendMsg()">Send</button>
+
+    <!-- Load Socket.IO client -->
+    <script src="/socket.io/socket.io.js"></script>
+
+    <script>
+      const socket = io(); // Connect automatically
+
+      function sendMsg() {
+        const text = document.getElementById("msg").value;
+        if (document.getElementById("msg").value != "") {
+          socket.emit("chat message", text);
+          document.getElementById("msg").value = "";          
+        }
+      }
+
+      /*
+      // Receive message from server
+      socket.on("chat message", function (msg) {
+        const li = document.createElement("li");
+        li.textContent = msg;
+        document.getElementById("messages").appendChild(li);
+      }); */
+
+      // Receive message from server
+      socket.on('riders_data', (data) => {
+          let html = '<table border="1"><tr><th>ID</th><th>Name</th><th>Team</th></tr>';
+          
+          data.forEach(rider => {
+              html += `<tr>
+                  <td>${rider.id}</td>
+                  <td>${rider.name}</td>
+                  <td>${rider.team}</td>
+              </tr>`;
+          });
+          
+          html += '</table>';
+          document.getElementById('tableContainer').innerHTML = html;
+      });    
+    </script>
+
+    <div id="tableContainer"></div>
+
+  </body>
+</html>
