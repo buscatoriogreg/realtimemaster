@@ -33,7 +33,7 @@ jobs:
       # Scaffold a clean RN 0.76 project — gives us gradlew, icons, and all
       # boilerplate without committing generated files to the repo.
       - name: Scaffold React Native 0.76 project
-        run: npx --yes react-native@0.76.5 init TimingApp --skip-install
+        run: npx --yes @react-native-community/cli@15 init TimingApp --version 0.76.5 --skip-install
         env:
           CI: true
 
