@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.timingapp">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- Classic Bluetooth (HC-05/HC-06 SPP) -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />

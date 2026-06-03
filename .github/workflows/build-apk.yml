@@ -47,21 +47,17 @@ jobs:
           cp timing-app/babel.config.js           TimingApp/babel.config.js
           cp timing-app/tsconfig.json             TimingApp/tsconfig.json
           cp timing-app/react-native.config.js    TimingApp/react-native.config.js
+          # Manifest: needed for Bluetooth permissions + usesCleartextTraffic (ws://)
           cp timing-app/android/app/src/main/AndroidManifest.xml \
              TimingApp/android/app/src/main/AndroidManifest.xml
-          cp -r timing-app/android/app/src/main/res/. \
-                TimingApp/android/app/src/main/res/
-          cp timing-app/android/app/src/main/java/com/timingapp/MainActivity.kt \
-             TimingApp/android/app/src/main/java/com/timingapp/MainActivity.kt
-          cp timing-app/android/app/src/main/java/com/timingapp/MainApplication.kt \
-             TimingApp/android/app/src/main/java/com/timingapp/MainApplication.kt
-          # Keep the scaffold's app/build.gradle — it is pre-matched to the exact
-          # AGP version shipped with RN 0.76 and avoids DSL compatibility issues.
-          cp timing-app/android/build.gradle       TimingApp/android/build.gradle
-          cp timing-app/android/gradle.properties  TimingApp/android/gradle.properties
-          cp timing-app/android/settings.gradle    TimingApp/android/settings.gradle
-          cp timing-app/android/app/proguard-rules.pro \
-             TimingApp/android/app/proguard-rules.pro
+          # App label only — leave the scaffold's styles.xml/icons untouched.
+          cp timing-app/android/app/src/main/res/values/strings.xml \
+             TimingApp/android/app/src/main/res/values/strings.xml
+          # NOTE: We intentionally do NOT override the scaffold's Android Gradle
+          # config (settings.gradle, root/app build.gradle, gradle.properties,
+          # styles.xml, MainActivity/MainApplication.kt). The scaffold generates
+          # these version-matched to RN 0.76 with working autolinking; overriding
+          # them broke `react-native config` packageName detection.
 
       - name: Install Node dependencies
         working-directory: TimingApp
@@ -92,7 +88,16 @@ jobs:
 
       - name: Debug react-native config
         working-directory: TimingApp
-        run: npx react-native config 2>&1 | python3 -c "import sys,json; d=json.load(sys.stdin); print('packageName:', d.get('project',{}).get('android',{}).get('packageName','NOT FOUND'))" || echo "react-native config failed or returned non-JSON"
+        run: |
+          echo "=== react-native.config.js ==="
+          cat react-native.config.js || echo "(missing)"
+          echo "=== AndroidManifest.xml (head) ==="
+          head -5 android/app/src/main/AndroidManifest.xml
+          echo "=== namespace in app/build.gradle ==="
+          grep -n "namespace\|applicationId" android/app/build.gradle || true
+          echo "=== react-native config -> project.android ==="
+          npx react-native config 2>/dev/null > rn-config.json || true
+          node -e "const c=require('./rn-config.json'); console.log(JSON.stringify(c.project?.android ?? 'NO project.android', null, 2));" || echo "could not parse config"
 
       - name: Build release APK
         working-directory: TimingApp/android
