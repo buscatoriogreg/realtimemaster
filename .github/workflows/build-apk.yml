@@ -95,9 +95,14 @@ jobs:
           head -5 android/app/src/main/AndroidManifest.xml
           echo "=== namespace in app/build.gradle ==="
           grep -n "namespace\|applicationId" android/app/build.gradle || true
-          echo "=== react-native config -> project.android ==="
-          npx react-native config 2>/dev/null > rn-config.json || true
-          node -e "const c=require('./rn-config.json'); console.log(JSON.stringify(c.project?.android ?? 'NO project.android', null, 2));" || echo "could not parse config"
+          echo "=== which react-native CLI ==="
+          ls -la node_modules/.bin/react-native || echo "no local CLI"
+          echo "=== react-native config (stderr captured) ==="
+          ./node_modules/.bin/react-native config > rn-config.json 2> rn-config-err.txt || echo "EXIT CODE: $?"
+          echo "--- stderr ---"; cat rn-config-err.txt
+          echo "--- stdout size ---"; wc -c rn-config.json
+          echo "--- project.android ---"
+          node -e "try{const c=require('./rn-config.json'); console.log(JSON.stringify(c.project?.android ?? 'NO project.android', null, 2));}catch(e){console.log('parse error:', e.message);}"
 
       - name: Build release APK
         working-directory: TimingApp/android
