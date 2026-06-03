@@ -54,8 +54,9 @@ jobs:
              TimingApp/android/app/src/main/java/com/timingapp/MainActivity.kt
           cp timing-app/android/app/src/main/java/com/timingapp/MainApplication.kt \
              TimingApp/android/app/src/main/java/com/timingapp/MainApplication.kt
+          # Keep the scaffold's app/build.gradle — it is pre-matched to the exact
+          # AGP version shipped with RN 0.76 and avoids DSL compatibility issues.
           cp timing-app/android/build.gradle       TimingApp/android/build.gradle
-          cp timing-app/android/app/build.gradle   TimingApp/android/app/build.gradle
           cp timing-app/android/gradle.properties  TimingApp/android/gradle.properties
           cp timing-app/android/settings.gradle    TimingApp/android/settings.gradle
           cp timing-app/android/app/proguard-rules.pro \
