@@ -13,7 +13,7 @@ type Mode       = 'start' | 'finish';
 type Screen     = 'setup' | 'bt' | 'race';
 type RaceSettings = { stage: number; category: string; };
 type QueuedEvent  = { id: string; payload: Record<string, unknown>; savedAt: string; };
-type PendingFinish = { timestamp: string } | null;
+type FinishEntry  = { timestamp: string };
 type DropItem     = { label: string; value: string };
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
@@ -110,7 +110,7 @@ export default function App() {
   const [pendingCount, setPending]   = useState(0);
   const [isSyncing, setSyncing]      = useState(false);
   const [searchQuery, setSearch]     = useState('');
-  const [pendingFinish, setPendingFin] = useState<PendingFinish>(null);
+  const [pendingFinishes, setPendingFins] = useState<FinishEntry[]>([]);
   const [ridersSync, setRidersSync]    = useState('');
 
   const ws              = useRef<WebSocket | null>(null);
@@ -121,10 +121,10 @@ export default function App() {
   const shouldReconnect = useRef(false);
 
   // BT listener reads latest state via ref — avoids stale closure
-  const live = useRef({ selectedRider, mode, raceSettings, pendingFinish });
+  const live = useRef({ selectedRider, mode, raceSettings, pendingFinishes });
   useEffect(() => {
-    live.current = { selectedRider, mode, raceSettings, pendingFinish };
-  }, [selectedRider, mode, raceSettings, pendingFinish]);
+    live.current = { selectedRider, mode, raceSettings, pendingFinishes };
+  }, [selectedRider, mode, raceSettings, pendingFinishes]);
 
   useEffect(() => { wsUrlRef.current = wsUrl; }, [wsUrl]);
 
@@ -327,7 +327,7 @@ export default function App() {
     const timestamp = toMysqlDatetime(new Date());
 
     if (m === 'finish') {
-      setPendingFin({ timestamp });
+      setPendingFins(prev => [...prev, { timestamp }]);
       setLastEvent(`⚡ Beam at ${timestamp} — tap the finisher`);
       return;
     }
@@ -345,7 +345,7 @@ export default function App() {
   };
 
   const assignFinish = useCallback((rider: Rider) => {
-    const pf = live.current.pendingFinish;
+    const pf = live.current.pendingFinishes[0];
     if (!pf) return;
     const rs = live.current.raceSettings;
     const payload: Record<string, unknown> = {
@@ -358,7 +358,7 @@ export default function App() {
     } else {
       enqueue(payload).then(n => setLastEvent(`📦 Offline (${n}): 🏁 #${rider.rider_no} ${rider.name}`));
     }
-    setPendingFin(null);
+    setPendingFins(prev => prev.slice(1));
     setSelected(rider);
   }, [enqueue]);
 
@@ -520,8 +520,9 @@ export default function App() {
 
   // ── RACE SCREEN ───────────────────────────────────────────────────────────
 
-  const isFinish = mode === 'finish';
-  const hasBeam  = isFinish && !!pendingFinish;
+  const isFinish   = mode === 'finish';
+  const hasBeam    = isFinish && pendingFinishes.length > 0;
+  const queuedMore = pendingFinishes.length - 1;
 
   return (
     <SafeAreaView style={s.container}>
@@ -557,10 +558,21 @@ export default function App() {
       {hasBeam && (
         <View style={s.beamBanner}>
           <View style={{ flex: 1 }}>
-            <Text style={s.beamTime}>{pendingFinish!.timestamp}</Text>
-            <Text style={s.beamSub}>⚡ Beam hit — tap the finisher below</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Text style={s.beamTime}>{pendingFinishes[0].timestamp}</Text>
+              {queuedMore > 0 && (
+                <View style={s.queueBadge}>
+                  <Text style={s.queueBadgeTxt}>+{queuedMore} more</Text>
+                </View>
+              )}
+            </View>
+            <Text style={s.beamSub}>
+              {queuedMore > 0
+                ? `⚡ ${pendingFinishes.length} beams queued — tap riders in crossing order`
+                : '⚡ Beam hit — tap the finisher below'}
+            </Text>
           </View>
-          <TouchableOpacity style={s.discardBtn} onPress={() => setPendingFin(null)}>
+          <TouchableOpacity style={s.discardBtn} onPress={() => setPendingFins(prev => prev.slice(1))}>
             <Text style={s.discardTxt}>Discard</Text>
           </TouchableOpacity>
         </View>
@@ -682,6 +694,8 @@ const s = StyleSheet.create({
   beamSub:        { color: '#c88800', fontSize: 12, marginTop: 2 },
   discardBtn:     { backgroundColor: '#3a2a00', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 8 },
   discardTxt:     { color: '#f0a500', fontSize: 12, fontWeight: '600' },
+  queueBadge:     { backgroundColor: '#f0a500', borderRadius: 10, paddingHorizontal: 7, paddingVertical: 2 },
+  queueBadgeTxt:  { color: '#1a1a2e', fontSize: 11, fontWeight: '700' },
   waitBanner:     { backgroundColor: '#16213e', borderRadius: 8, padding: 10, marginBottom: 6, alignItems: 'center' },
   waitTxt:        { color: '#555', fontSize: 13 },
   readyBox:       { backgroundColor: '#0a2a0a', borderRadius: 8, padding: 12, marginBottom: 6, flexDirection: 'row', alignItems: 'center', gap: 10 },
