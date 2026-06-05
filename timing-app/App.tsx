@@ -364,12 +364,16 @@ export default function App() {
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
-  useEffect(() => () => {
-    shouldReconnect.current = false;
-    if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
-    ws.current?.close();
-    btSub.current?.remove();
-  }, []);
+  useEffect(() => {
+    shouldReconnect.current = true;
+    connectWs();
+    return () => {
+      shouldReconnect.current = false;
+      if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+      ws.current?.close();
+      btSub.current?.remove();
+    };
+  }, [connectWs]);
 
   // ── SETUP SCREEN ──────────────────────────────────────────────────────────
 
