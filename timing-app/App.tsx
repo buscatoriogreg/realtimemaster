@@ -619,9 +619,9 @@ export default function App() {
               activeOpacity={!isFinish || hasBeam ? 0.65 : 1}
             >
               <Text style={[s.riderName, isSel && s.riderNameSel]}>
-                #{item.rider_no}  {item.name}
+                #{item.rider_no ?? ''}  {item.name ?? ''}
               </Text>
-              <Text style={s.riderMeta}>{item.team}  ·  {item.category}</Text>
+              <Text style={s.riderMeta}>{item.team ?? ''}  ·  {item.category ?? ''}</Text>
             </TouchableOpacity>
           );
         }}
