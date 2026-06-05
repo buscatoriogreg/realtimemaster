@@ -138,8 +138,8 @@ export default function App() {
 
   const filteredRiders = searchQuery.trim()
     ? riders.filter(r =>
-        r.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        r.rider_no.includes(searchQuery))
+        (r.name ?? '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (r.rider_no ?? '').includes(searchQuery))
     : riders;
 
   // ── Offline queue ─────────────────────────────────────────────────────────
