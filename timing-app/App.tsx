@@ -303,13 +303,28 @@ export default function App() {
             break;
           case 'riders_on_track':
             if (Array.isArray(d.data)) {
-              setOnTrack(d.data.map((r: any) => ({
-                key: `${r.rider_id}-${r.stage}`,
-                riderId: Number(r.rider_id),
-                name: r.name,
-                stage: Number(r.stage),
-                startTs: r.created_at ? parseServerTs(r.created_at) : Date.now(),
-              })));
+              // Reconcile against the running list rather than replacing it.
+              // A snapshot is rebroadcast every time *any* rider starts, so a
+              // blind replace would reset startTs (hence the visible clock
+              // jump) on riders already ticking. Preserve the existing startTs
+              // — the instant we first saw them — so only genuinely new riders
+              // take their start from the server's created_at.
+              setOnTrack(prev => {
+                const prevByKey = new Map(prev.map(e => [e.key, e]));
+                return d.data.map((r: any) => {
+                  const key = `${r.rider_id}-${r.stage}`;
+                  const existing = prevByKey.get(key);
+                  return {
+                    key,
+                    riderId: Number(r.rider_id),
+                    name: r.name,
+                    stage: Number(r.stage),
+                    startTs: existing
+                      ? existing.startTs
+                      : (r.created_at ? parseServerTs(r.created_at) : Date.now()),
+                  };
+                });
+              });
             }
             break;
           case 'finished_riders':
