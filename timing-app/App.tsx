@@ -13,9 +13,10 @@ type Mode       = 'start' | 'finish';
 type Screen     = 'setup' | 'bt' | 'race';
 type RaceSettings = { stage: number; category: string; };
 type QueuedEvent  = { id: string; payload: Record<string, unknown>; savedAt: string; };
-type FinishEntry  = { timestamp: string };
-type OnTrackEntry = { key: string; riderId: number; name: string; stage: number; startTs: number };
-type DropItem     = { label: string; value: string };
+type FinishEntry      = { timestamp: string };
+type OnTrackEntry     = { key: string; riderId: number; name: string; stage: number; startTs: number };
+type FinishedRider    = { riderId: number; finishTs: string };
+type DropItem         = { label: string; value: string };
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -57,6 +58,11 @@ function fmtElapsed(ms: number): string {
   return h > 0
     ? `${h}:${p(m)}:${p(sec)}.${millis}`
     : `${p(m)}:${p(sec)}.${millis}`;
+}
+
+// Extract HH:MM:SS.mmm from a MySQL datetime string '2026-06-06 14:25:44.123'.
+function formatFinishTime(ts: string): string {
+  return ts.includes(' ') ? ts.split(' ')[1] : ts;
 }
 
 // ── Inline Dropdown ───────────────────────────────────────────────────────────
@@ -139,6 +145,7 @@ export default function App() {
   const [pendingFinishes, setPendingFins] = useState<FinishEntry[]>([]);
   const [ridersSync, setRidersSync]    = useState('');
   const [onTrack, setOnTrack]          = useState<OnTrackEntry[]>([]);
+  const [finishedRiders, setFinished]  = useState<FinishedRider[]>([]);
   const [nowTick, setNowTick]          = useState(Date.now());
 
   const ws              = useRef<WebSocket | null>(null);
@@ -193,12 +200,13 @@ export default function App() {
 
   const categoryItems: DropItem[] = categories.map(c => ({ label: c, value: c }));
 
-  const onTrackIds = new Set(onTrack.map(e => e.riderId));
+  const onTrackIds  = new Set(onTrack.map(e => e.riderId));
+  const finishedIds = new Set(finishedRiders.map(e => e.riderId));
   // Start: hide riders already on track or currently selected (in start trigger).
-  // Finish: show all riders — onTrack may be empty if not yet synced with server.
+  // Finish: show only riders who have started (on track) or already finished.
   const baseRiders = mode === 'start'
     ? riders.filter(r => !onTrackIds.has(r.id) && r.id !== selectedRider?.id)
-    : riders;
+    : riders.filter(r => onTrackIds.has(r.id) || finishedIds.has(r.id));
 
   const filteredRiders = searchQuery.trim()
     ? baseRiders.filter(r =>
@@ -441,6 +449,10 @@ export default function App() {
     }
     setPendingFins(prev => prev.slice(1));
     setSelected(rider);
+    setFinished(prev => [
+      ...prev.filter(e => e.riderId !== rider.id),
+      { riderId: rider.id, finishTs: pf.timestamp },
+    ]);
   }, [enqueue]);
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -614,6 +626,8 @@ export default function App() {
   riders.forEach(r => { riderNoById[r.id] = r.rider_no; });
   const onTrackByRider: Record<number, OnTrackEntry> = {};
   onTrack.forEach(e => { onTrackByRider[e.riderId] = e; });
+  const finishedByRider: Record<number, FinishedRider> = {};
+  finishedRiders.forEach(e => { finishedByRider[e.riderId] = e; });
 
   return (
     <SafeAreaView style={s.container}>
@@ -684,8 +698,8 @@ export default function App() {
         </View>
       )}
 
-      {/* Riders on track with live runtime — shared across devices when online */}
-      {onTrack.length > 0 && (
+      {/* Riders on track with live runtime — Start mode only */}
+      {!isFinish && onTrack.length > 0 && (
         <View style={s.trackCard}>
           <Text style={s.trackTitle}>
             🚴 On Track · {onTrack.length}{wsConnected ? ' · live' : ' · local'}
@@ -722,26 +736,36 @@ export default function App() {
         keyExtractor={item => String(item.id)}
         style={s.riderList}
         keyboardShouldPersistTaps="handled"
-        extraData={`${nowTick}|${onTrack.length}|${selectedRider?.id}|${hasBeam}`}
+        extraData={`${nowTick}|${onTrack.length}|${selectedRider?.id}|${hasBeam}|${finishedRiders.length}`}
         renderItem={({ item }) => {
-          const isSel = selectedRider?.id === item.id;
-          const ot    = onTrackByRider[item.id];
+          const isSel     = selectedRider?.id === item.id;
+          const ot        = onTrackByRider[item.id];
+          const fin       = finishedByRider[item.id];
+          const isFinishedRider = !!fin;
           return (
             <TouchableOpacity
-              style={[s.riderItem, isSel && s.riderItemSel, hasBeam && s.riderItemAssign, ot && s.riderItemOnTrack]}
+              style={[
+                s.riderItem,
+                isFinishedRider ? s.riderItemFinished : (isSel && s.riderItemSel),
+                !isFinishedRider && hasBeam && s.riderItemAssign,
+                !isFinishedRider && ot && s.riderItemOnTrack,
+              ]}
               onPress={() => {
+                if (isFinishedRider) return;
                 if (isFinish && hasBeam) assignFinish(item);
                 else if (!isFinish)      setSelected(item);
               }}
-              activeOpacity={!isFinish || hasBeam ? 0.65 : 1}
+              activeOpacity={isFinishedRider ? 1 : (!isFinish || hasBeam ? 0.65 : 1)}
             >
               <View style={s.riderRowTop}>
-                <Text style={[s.riderName, isSel && s.riderNameSel]}>
+                <Text style={[s.riderName, !isFinishedRider && isSel && s.riderNameSel, isFinishedRider && s.riderNameDone]}>
                   #{item.rider_no ?? ''}  {item.name ?? ''}
                 </Text>
-                {ot && (
+                {isFinishedRider ? (
+                  <Text style={s.riderFinishedTag}>● Finished · {formatFinishTime(fin.finishTs)}</Text>
+                ) : ot ? (
                   <Text style={s.riderOnTrackTag}>● on track · {fmtElapsed(nowTick - ot.startTs)}</Text>
-                )}
+                ) : null}
               </View>
               <Text style={s.riderMeta}>{item.team ?? ''}  ·  {item.category ?? ''}</Text>
             </TouchableOpacity>
@@ -837,11 +861,14 @@ const s = StyleSheet.create({
   riderItem:      { backgroundColor: '#16213e', borderRadius: 8, padding: 12, marginBottom: 5, borderWidth: 2, borderColor: 'transparent' },
   riderItemSel:   { borderColor: '#e94560', backgroundColor: '#2a0a14' },
   riderItemAssign:{ borderColor: '#f0a500', backgroundColor: '#1e1600' },
-  riderItemOnTrack:{ borderColor: '#1f6f3f' },
+  riderItemOnTrack:  { borderColor: '#1f6f3f' },
+  riderItemFinished: { backgroundColor: '#111820', borderColor: '#2a3a2a', opacity: 0.75 },
   riderRowTop:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   riderName:      { color: '#fff', fontSize: 15, fontWeight: '600', flexShrink: 1 },
   riderNameSel:   { color: '#e94560' },
-  riderOnTrackTag:{ color: '#4caf50', fontSize: 12, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  riderNameDone:  { color: '#667', fontSize: 15, fontWeight: '600', flexShrink: 1 },
+  riderOnTrackTag:  { color: '#4caf50', fontSize: 12, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  riderFinishedTag: { color: '#7abf7a', fontSize: 12, fontWeight: '700', fontVariant: ['tabular-nums'] },
   riderMeta:      { color: '#666', fontSize: 12, marginTop: 2 },
   eventBox:       { backgroundColor: '#16213e', borderRadius: 8, padding: 12, marginVertical: 6, minHeight: 48, justifyContent: 'center' },
   eventTxt:       { color: '#ccc', fontSize: 13, textAlign: 'center' },
