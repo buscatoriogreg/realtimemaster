@@ -195,10 +195,10 @@ export default function App() {
 
   const onTrackIds = new Set(onTrack.map(e => e.riderId));
   // Start: hide riders already on track or currently selected (in start trigger).
-  // Finish: show only riders currently on track; they drop off once finished.
+  // Finish: show all riders — onTrack may be empty if not yet synced with server.
   const baseRiders = mode === 'start'
     ? riders.filter(r => !onTrackIds.has(r.id) && r.id !== selectedRider?.id)
-    : riders.filter(r => onTrackIds.has(r.id));
+    : riders;
 
   const filteredRiders = searchQuery.trim()
     ? baseRiders.filter(r =>
