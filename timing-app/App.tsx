@@ -189,11 +189,17 @@ export default function App() {
 
   const categoryItems: DropItem[] = categories.map(c => ({ label: c, value: c }));
 
+  // In Start mode the list is "riders not yet on track", so hide anyone
+  // already started. In Finish mode keep everyone — the finisher being
+  // assigned is on track by definition.
+  const onTrackIds = new Set(onTrack.map(e => e.riderId));
+  const baseRiders = mode === 'start' ? riders.filter(r => !onTrackIds.has(r.id)) : riders;
+
   const filteredRiders = searchQuery.trim()
-    ? riders.filter(r =>
+    ? baseRiders.filter(r =>
         String(r.name ?? '').toLowerCase().includes(searchQuery.toLowerCase()) ||
         String(r.rider_no ?? '').includes(searchQuery))
-    : riders;
+    : baseRiders;
 
   // ── Offline queue ─────────────────────────────────────────────────────────
 
@@ -706,7 +712,7 @@ export default function App() {
 
       {/* Search */}
       <TextInput style={s.searchInput} value={searchQuery} onChangeText={setSearch}
-        placeholder={`Search ${riders.length} riders…`} placeholderTextColor="#555" />
+        placeholder={`Search ${baseRiders.length} riders…`} placeholderTextColor="#555" />
 
       {/* Rider list */}
       <FlatList
