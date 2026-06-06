@@ -14,6 +14,7 @@ type Screen     = 'setup' | 'bt' | 'race';
 type RaceSettings = { stage: number; category: string; };
 type QueuedEvent  = { id: string; payload: Record<string, unknown>; savedAt: string; };
 type FinishEntry  = { timestamp: string };
+type OnTrackEntry = { key: string; rider: Rider; startTs: number; stage: number };
 type DropItem     = { label: string; value: string };
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
@@ -22,6 +23,7 @@ const QUEUE_KEY     = '@timing_offline_queue';
 const RIDERS_KEY    = '@timing_riders';
 const CATS_KEY      = '@timing_categories';
 const STAGE_CNT_KEY = '@timing_stage_count';
+const ONTRACK_KEY   = '@timing_on_track';
 const RECONNECT_MS  = 4000;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -31,6 +33,16 @@ function toMysqlDatetime(d: Date): string {
   const p = (n: number, z = 2) => String(n).padStart(z, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
     `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+}
+
+// Elapsed ms → MM:SS, or H:MM:SS past an hour.
+function fmtElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const p = (n: number) => String(n).padStart(2, '0');
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  return h > 0 ? `${h}:${p(m)}:${p(sec)}` : `${p(m)}:${p(sec)}`;
 }
 
 // ── Inline Dropdown ───────────────────────────────────────────────────────────
@@ -112,6 +124,8 @@ export default function App() {
   const [searchQuery, setSearch]     = useState('');
   const [pendingFinishes, setPendingFins] = useState<FinishEntry[]>([]);
   const [ridersSync, setRidersSync]    = useState('');
+  const [onTrack, setOnTrack]          = useState<OnTrackEntry[]>([]);
+  const [nowTick, setNowTick]          = useState(Date.now());
 
   const ws              = useRef<WebSocket | null>(null);
   const btDevice        = useRef<any>(null);
@@ -125,6 +139,29 @@ export default function App() {
   useEffect(() => {
     live.current = { selectedRider, mode, raceSettings, pendingFinishes };
   }, [selectedRider, mode, raceSettings, pendingFinishes]);
+
+  // 1 s ticker drives the live runtime of riders on track (start mode only).
+  useEffect(() => {
+    if (mode !== 'start' || onTrack.length === 0) return;
+    const id = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [mode, onTrack.length]);
+
+  // Persist on-track list so a crash/restart keeps the running clocks.
+  // Skip until the initial load has hydrated, so we don't clobber stored data.
+  const onTrackHydrated = useRef(false);
+  useEffect(() => {
+    if (!onTrackHydrated.current) { onTrackHydrated.current = true; return; }
+    AsyncStorage.setItem(ONTRACK_KEY, JSON.stringify(onTrack)).catch(() => {});
+  }, [onTrack]);
+
+  const addToTrack = useCallback((rider: Rider, startTs: number, stage: number) => {
+    setOnTrack(prev => [{ key: `${rider.id}-${startTs}`, rider, startTs, stage }, ...prev]);
+  }, []);
+
+  const removeFromTrack = useCallback((key: string) => {
+    setOnTrack(prev => prev.filter(e => e.key !== key));
+  }, []);
 
   useEffect(() => { wsUrlRef.current = wsUrl; }, [wsUrl]);
 
@@ -187,12 +224,13 @@ export default function App() {
   // ── Load all caches on first mount ────────────────────────────────────────
 
   useEffect(() => {
-    AsyncStorage.multiGet([RIDERS_KEY, CATS_KEY, STAGE_CNT_KEY, QUEUE_KEY])
-      .then(([[, rRaw], [, cRaw], [, sRaw], [, qRaw]]) => {
+    AsyncStorage.multiGet([RIDERS_KEY, CATS_KEY, STAGE_CNT_KEY, QUEUE_KEY, ONTRACK_KEY])
+      .then(([[, rRaw], [, cRaw], [, sRaw], [, qRaw], [, tRaw]]) => {
         if (rRaw) { const r = JSON.parse(rRaw); setRiders(r); setRidersSync('cached'); }
         if (cRaw)   setCategories(JSON.parse(cRaw));
         if (sRaw)   setStageCount(parseInt(sRaw) || 10);
         if (qRaw)   setPending(JSON.parse(qRaw).length);
+        if (tRaw)   setOnTrack(JSON.parse(tRaw));
       }).catch(() => {});
   }, []);
 
@@ -324,7 +362,8 @@ export default function App() {
 
   const handleBeamBreak = () => {
     const { mode: m, raceSettings: rs, selectedRider: rider } = live.current;
-    const timestamp = toMysqlDatetime(new Date());
+    const startDate = new Date();
+    const timestamp = toMysqlDatetime(startDate);
 
     if (m === 'finish') {
       setPendingFins(prev => [...prev, { timestamp }]);
@@ -342,6 +381,7 @@ export default function App() {
     } else {
       enqueue(payload).then(n => setLastEvent(`📦 Offline (${n}): 🚦 #${rider.rider_no} ${rider.name}`));
     }
+    addToTrack(rider, startDate.getTime(), rs.stage);
   };
 
   const assignFinish = useCallback((rider: Rider) => {
@@ -597,6 +637,33 @@ export default function App() {
         </View>
       )}
 
+      {/* START — riders on track with live runtime */}
+      {!isFinish && onTrack.length > 0 && (
+        <View style={s.trackCard}>
+          <Text style={s.trackTitle}>🚴 On Track · {onTrack.length}</Text>
+          <ScrollView style={{ maxHeight: 170 }} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+            {onTrack.map(e => (
+              <View key={e.key} style={s.trackRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.trackName} numberOfLines={1}>
+                    #{e.rider.rider_no ?? ''}  {e.rider.name ?? ''}
+                  </Text>
+                  <Text style={s.trackMeta}>S{e.stage}</Text>
+                </View>
+                <Text style={s.trackTimer}>{fmtElapsed(nowTick - e.startTs)}</Text>
+                <TouchableOpacity
+                  style={s.trackRemove}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  onPress={() => removeFromTrack(e.key)}
+                >
+                  <Text style={s.trackRemoveTxt}>✕</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+          </ScrollView>
+        </View>
+      )}
+
       {/* Search */}
       <TextInput style={s.searchInput} value={searchQuery} onChangeText={setSearch}
         placeholder={`Search ${riders.length} riders…`} placeholderTextColor="#555" />
@@ -705,6 +772,14 @@ const s = StyleSheet.create({
   readyBox:       { backgroundColor: '#0a2a0a', borderRadius: 8, padding: 12, marginBottom: 6, flexDirection: 'row', alignItems: 'center', gap: 10 },
   readyLabel:     { color: '#4caf50', fontSize: 13 },
   readyName:      { color: '#4caf50', fontSize: 17, fontWeight: '700', flex: 1 },
+  trackCard:      { backgroundColor: '#0d1b2a', borderRadius: 10, padding: 10, marginBottom: 6, borderWidth: 1, borderColor: '#1f3a5a' },
+  trackTitle:     { color: '#4aa3df', fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 },
+  trackRow:       { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#16213e', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8, marginBottom: 5 },
+  trackName:      { color: '#fff', fontSize: 14, fontWeight: '600' },
+  trackMeta:      { color: '#5c7a99', fontSize: 11, marginTop: 1 },
+  trackTimer:     { color: '#4caf50', fontSize: 18, fontWeight: '700', fontVariant: ['tabular-nums'], letterSpacing: 0.5 },
+  trackRemove:    { backgroundColor: '#2a2a4a', borderRadius: 6, width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
+  trackRemoveTxt: { color: '#999', fontSize: 14, fontWeight: '700' },
   searchInput:    { backgroundColor: '#16213e', color: '#fff', borderRadius: 8, padding: 10, fontSize: 14, borderWidth: 1, borderColor: '#2a2a4a', marginBottom: 6 },
   riderList:      { flex: 1 },
   riderItem:      { backgroundColor: '#16213e', borderRadius: 8, padding: 12, marginBottom: 5, borderWidth: 2, borderColor: 'transparent' },
