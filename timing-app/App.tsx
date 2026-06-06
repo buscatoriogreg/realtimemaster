@@ -15,7 +15,7 @@ type RaceSettings = { stage: number; category: string; };
 type QueuedEvent  = { id: string; payload: Record<string, unknown>; savedAt: string; };
 type FinishEntry      = { timestamp: string };
 type OnTrackEntry     = { key: string; riderId: number; name: string; stage: number; startTs: number };
-type FinishedRider    = { riderId: number; finishTs: string };
+type FinishedRider    = { riderId: number; stage: number; diffTime: string };
 type DropItem         = { label: string; value: string };
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
@@ -302,15 +302,22 @@ export default function App() {
             cacheRiders(d.data);
             break;
           case 'riders_on_track':
-            // Server is authoritative when online: this reflects starts AND
-            // finishes from every device, so it replaces the local list.
             if (Array.isArray(d.data)) {
               setOnTrack(d.data.map((r: any) => ({
                 key: `${r.rider_id}-${r.stage}`,
-                riderId: r.rider_id,
+                riderId: Number(r.rider_id),
                 name: r.name,
-                stage: r.stage,
-                startTs: r.start_time ? parseServerTs(r.start_time) : Date.now(),
+                stage: Number(r.stage),
+                startTs: r.created_at ? parseServerTs(r.created_at) : Date.now(),
+              })));
+            }
+            break;
+          case 'finished_riders':
+            if (Array.isArray(d.data)) {
+              setFinished(d.data.map((r: any) => ({
+                riderId: Number(r.rider_id),
+                stage: Number(r.stage),
+                diffTime: r.diff_time ?? '',
               })));
             }
             break;
@@ -325,9 +332,12 @@ export default function App() {
               cacheCategories(d.data.map((c: any) => c.category_name));
             }
             break;
-          case 'result_race_setting':
-            setSettings({ stage: d.data?.stage ?? 1, category: d.data?.category ?? '' });
+          case 'result_race_setting': {
+            const stage = d.data?.stage ?? 1;
+            setSettings({ stage, category: d.data?.category ?? '' });
+            socket.send(JSON.stringify({ action: 'get_finished_riders', stage }));
             break;
+          }
           case 'set_stage_ok':
             setLastEvent(`✅ Stage ${d.stage} / ${d.category} saved to server`);
             break;
@@ -357,8 +367,10 @@ export default function App() {
     const stage = parseInt(val);
     setSettings(prev => {
       const next = { ...prev, stage };
-      if (ws.current?.readyState === WebSocket.OPEN)
+      if (ws.current?.readyState === WebSocket.OPEN) {
         ws.current.send(JSON.stringify({ action: 'set_stage', stage: next.stage, category: next.category }));
+        ws.current.send(JSON.stringify({ action: 'get_finished_riders', stage: next.stage }));
+      }
       return next;
     });
   }, []);
@@ -453,9 +465,10 @@ export default function App() {
     }
     setPendingFins(prev => prev.slice(1));
     setSelected(rider);
+    // Optimistic: show finish timestamp immediately; server will replace with diff_time.
     setFinished(prev => [
-      ...prev.filter(e => e.riderId !== rider.id),
-      { riderId: rider.id, finishTs: pf.timestamp },
+      ...prev.filter(e => !(e.riderId === rider.id && e.stage === rs.stage)),
+      { riderId: rider.id, stage: rs.stage, diffTime: formatFinishTime(pf.timestamp) },
     ]);
   }, [enqueue]);
 
@@ -626,10 +639,11 @@ export default function App() {
   const queuedMore = pendingFinishes.length - 1;
 
   // Lookups for per-rider status badges in the list.
+  // finishedByRider keyed by "riderId-stage" to support multi-stage races.
   const onTrackByRider: Record<number, OnTrackEntry> = {};
   onTrack.forEach(e => { onTrackByRider[e.riderId] = e; });
-  const finishedByRider: Record<number, FinishedRider> = {};
-  finishedRiders.forEach(e => { finishedByRider[e.riderId] = e; });
+  const finishedByRider: Record<string, FinishedRider> = {};
+  finishedRiders.forEach(e => { finishedByRider[`${e.riderId}-${e.stage}`] = e; });
 
   return (
     <SafeAreaView style={s.container}>
@@ -711,19 +725,18 @@ export default function App() {
         renderItem={({ item }) => {
           const isSel = selectedRider?.id === item.id;
           const ot    = onTrackByRider[item.id];
-          const fin   = finishedByRider[item.id];
-          // Start: a rider already on track is locked (started, ticking).
-          // Finish: a rider already finished is locked (result recorded).
-          const startLocked  = !isFinish && !!ot;
-          const finishLocked = isFinish && !!fin;
-          const locked = startLocked || finishLocked;
+          const fin   = finishedByRider[`${item.id}-${raceSettings.stage}`];
+          // A rider is locked if they're on track (Start) or have a finish result (both modes).
+          const startOnTrack  = !isFinish && !!ot && !fin;
+          const hasResult     = !!fin;
+          const locked = startOnTrack || hasResult;
           return (
             <TouchableOpacity
               style={[
                 s.riderItem,
-                locked ? s.riderItemFinished : (isSel && s.riderItemSel),
+                hasResult ? s.riderItemFinished : (isSel && s.riderItemSel),
                 !locked && hasBeam && s.riderItemAssign,
-                !locked && ot && s.riderItemOnTrack,
+                startOnTrack && s.riderItemOnTrack,
               ]}
               onPress={() => {
                 if (locked) return;
@@ -736,8 +749,8 @@ export default function App() {
                 <Text style={[s.riderName, !locked && isSel && s.riderNameSel, locked && s.riderNameDone]}>
                   #{item.rider_no ?? ''}  {item.name ?? ''}
                 </Text>
-                {finishLocked ? (
-                  <Text style={s.riderFinishedTag}>● Finished · {formatFinishTime(fin.finishTs)}</Text>
+                {hasResult ? (
+                  <Text style={s.riderFinishedTag}>● Finished · {fin.diffTime}</Text>
                 ) : ot ? (
                   <Text style={s.riderOnTrackTag}>● on track · {fmtElapsed(nowTick - ot.startTs)}</Text>
                 ) : null}

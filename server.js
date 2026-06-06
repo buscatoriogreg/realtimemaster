@@ -29,17 +29,42 @@ db.getConnection((err, conn) => {
     conn.release();
 });
 
-// Current riders on track, with start_time recovered from the active
-// 25_times row (stop_time IS NULL) — avoids needing a schema change.
+// Active riders — uses created_at (auto-set on insert) as the canonical
+// start reference so both Start and Finish devices show the same elapsed time.
 function queryOnTrack(cb) {
     const sql =
-        'SELECT rot.rider_id, rot.name, rot.team, rot.category, rot.stage, t.start_time ' +
-        'FROM riders_on_track rot ' +
-        'LEFT JOIN 25_times t ON t.rider_id = rot.rider_id AND t.stage = rot.stage AND t.stop_time IS NULL ' +
-        'ORDER BY t.start_time';
+        'SELECT rider_id, name, team, category, stage, created_at ' +
+        'FROM riders_on_track ORDER BY created_at';
     db.query(sql, (err, rows) => {
         if (err) { console.error('on_track query error:', err.message); cb([]); return; }
         cb(rows || []);
+    });
+}
+
+// Riders who have finished a stage — returns diff_time for display.
+function queryFinishedRiders(stage, cb) {
+    const sql =
+        'SELECT t.rider_id, r.name, r.team, r.category, t.stage, t.diff_time ' +
+        'FROM 25_times t ' +
+        'JOIN 25_riders r ON r.id = t.rider_id ' +
+        'WHERE t.stage = ? AND t.diff_time IS NOT NULL';
+    db.query(sql, [stage], (err, rows) => {
+        if (err) { console.error('finished_riders query error:', err.message); cb([]); return; }
+        cb(rows || []);
+    });
+}
+
+function sendFinishedRiders(client, stage) {
+    queryFinishedRiders(stage, (rows) => {
+        if (client.readyState === WebSocket.OPEN)
+            client.send(JSON.stringify({ type: 'finished_riders', data: rows }));
+    });
+}
+
+function broadcastFinishedRiders(stage) {
+    queryFinishedRiders(stage, (rows) => {
+        const payload = JSON.stringify({ type: 'finished_riders', data: rows });
+        wss.clients.forEach((c) => { if (c.readyState === WebSocket.OPEN) c.send(payload); });
     });
 }
 
@@ -127,6 +152,10 @@ wss.on('connection', (ws) => {
 
                 case 'get_riders_on_track':
                     sendOnTrack(ws);
+                    break;
+
+                case 'get_finished_riders':
+                    sendFinishedRiders(ws, data.stage);
                     break;
 
                 case 'update_rider':
@@ -261,6 +290,7 @@ wss.on('connection', (ws) => {
                                             return;
                                         } else {
                                             broadcastOnTrack();
+                                            broadcastFinishedRiders(data.stage);
                                             db.query('call 25_get_race_result(?,?)',
                                                 [data.stage, data.category],
                                                 (err, resultRace) => {
