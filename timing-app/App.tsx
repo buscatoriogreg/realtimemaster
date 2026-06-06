@@ -45,14 +45,18 @@ function parseServerTs(s: string): number {
   return isNaN(t) ? Date.now() : t;
 }
 
-// Elapsed ms → MM:SS, or H:MM:SS past an hour.
+// Elapsed ms → MM:SS.mmm, or H:MM:SS.mmm past an hour.
 function fmtElapsed(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000));
+  const totalMs = Math.max(0, ms);
+  const total = Math.floor(totalMs / 1000);
   const p = (n: number) => String(n).padStart(2, '0');
   const h = Math.floor(total / 3600);
   const m = Math.floor((total % 3600) / 60);
   const sec = total % 60;
-  return h > 0 ? `${h}:${p(m)}:${p(sec)}` : `${p(m)}:${p(sec)}`;
+  const millis = String(Math.floor(totalMs % 1000)).padStart(3, '0');
+  return h > 0
+    ? `${h}:${p(m)}:${p(sec)}.${millis}`
+    : `${p(m)}:${p(sec)}.${millis}`;
 }
 
 // ── Inline Dropdown ───────────────────────────────────────────────────────────
@@ -150,10 +154,10 @@ export default function App() {
     live.current = { selectedRider, mode, raceSettings, pendingFinishes };
   }, [selectedRider, mode, raceSettings, pendingFinishes]);
 
-  // 1 s ticker drives the live runtime of riders on track (both modes).
+  // 100 ms ticker drives the live runtime with millisecond precision.
   useEffect(() => {
     if (onTrack.length === 0) return;
-    const id = setInterval(() => setNowTick(Date.now()), 1000);
+    const id = setInterval(() => setNowTick(Date.now()), 100);
     return () => clearInterval(id);
   }, [onTrack.length]);
 
@@ -189,11 +193,12 @@ export default function App() {
 
   const categoryItems: DropItem[] = categories.map(c => ({ label: c, value: c }));
 
-  // In Start mode the list is "riders not yet on track", so hide anyone
-  // already started. In Finish mode keep everyone — the finisher being
-  // assigned is on track by definition.
   const onTrackIds = new Set(onTrack.map(e => e.riderId));
-  const baseRiders = mode === 'start' ? riders.filter(r => !onTrackIds.has(r.id)) : riders;
+  // Start: hide riders already on track or currently selected (in start trigger).
+  // Finish: show only riders currently on track; they drop off once finished.
+  const baseRiders = mode === 'start'
+    ? riders.filter(r => !onTrackIds.has(r.id) && r.id !== selectedRider?.id)
+    : riders.filter(r => onTrackIds.has(r.id));
 
   const filteredRiders = searchQuery.trim()
     ? baseRiders.filter(r =>
@@ -710,9 +715,6 @@ export default function App() {
         </View>
       )}
 
-      {/* Search */}
-      <TextInput style={s.searchInput} value={searchQuery} onChangeText={setSearch}
-        placeholder={`Search ${baseRiders.length} riders…`} placeholderTextColor="#555" />
 
       {/* Rider list */}
       <FlatList
@@ -754,9 +756,6 @@ export default function App() {
         </Text>
       </View>
 
-      <TouchableOpacity style={[s.btn, s.btnGray]} onPress={handleBeamBreak}>
-        <Text style={s.btnText}>Manual Trigger (Test)</Text>
-      </TouchableOpacity>
 
     </SafeAreaView>
   );
