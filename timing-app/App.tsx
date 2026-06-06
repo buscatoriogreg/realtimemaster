@@ -723,20 +723,21 @@ export default function App() {
         keyboardShouldPersistTaps="handled"
         extraData={`${nowTick}|${onTrack.length}|${selectedRider?.id}|${hasBeam}|${finishedRiders.length}`}
         renderItem={({ item }) => {
-          const isSel = selectedRider?.id === item.id;
-          const ot    = onTrackByRider[item.id];
-          const fin   = finishedByRider[`${item.id}-${raceSettings.stage}`];
-          // A rider is locked if they're on track (Start) or have a finish result (both modes).
-          const startOnTrack  = !isFinish && !!ot && !fin;
-          const hasResult     = !!fin;
-          const locked = startOnTrack || hasResult;
+          const isSel     = selectedRider?.id === item.id;
+          const ot        = onTrackByRider[item.id];
+          const fin       = finishedByRider[`${item.id}-${raceSettings.stage}`];
+          const isOnTrack = !!ot && !fin;   // currently on course, no result yet
+          const hasResult = !!fin;
+          // Start: on-track riders are locked (can't re-select).
+          // Finish: on-track riders stay tappable so a finish can be assigned.
+          const locked = (!isFinish && isOnTrack) || hasResult;
           return (
             <TouchableOpacity
               style={[
                 s.riderItem,
                 hasResult ? s.riderItemFinished : (isSel && s.riderItemSel),
                 !locked && hasBeam && s.riderItemAssign,
-                startOnTrack && s.riderItemOnTrack,
+                isOnTrack && s.riderItemOnTrack,
               ]}
               onPress={() => {
                 if (locked) return;
