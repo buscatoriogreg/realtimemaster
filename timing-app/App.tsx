@@ -161,11 +161,20 @@ export default function App() {
     live.current = { selectedRider, mode, raceSettings, pendingFinishes };
   }, [selectedRider, mode, raceSettings, pendingFinishes]);
 
-  // 100 ms ticker drives the live runtime with millisecond precision.
+  // Live runtime ticker (ms precision). Aligned to wall-clock 100 ms
+  // boundaries via setTimeout rather than a free-running setInterval, so two
+  // phones with network-synced clocks sample at the same instants — this
+  // removes tick-phase jitter between Start and Finish devices, leaving only
+  // any real device clock skew.
   useEffect(() => {
     if (onTrack.length === 0) return;
-    const id = setInterval(() => setNowTick(Date.now()), 100);
-    return () => clearInterval(id);
+    let id: ReturnType<typeof setTimeout>;
+    const schedule = () => {
+      id = setTimeout(() => { setNowTick(Date.now()); schedule(); },
+        100 - (Date.now() % 100));
+    };
+    schedule();
+    return () => clearTimeout(id);
   }, [onTrack.length]);
 
   // Persist on-track list so a crash/restart keeps the running clocks.
@@ -186,9 +195,6 @@ export default function App() {
     });
   }, []);
 
-  const removeFromTrack = useCallback((key: string) => {
-    setOnTrack(prev => prev.filter(e => e.key !== key));
-  }, []);
 
   useEffect(() => { wsUrlRef.current = wsUrl; }, [wsUrl]);
 
@@ -202,11 +208,9 @@ export default function App() {
 
   const onTrackIds  = new Set(onTrack.map(e => e.riderId));
   const finishedIds = new Set(finishedRiders.map(e => e.riderId));
-  // Start: hide riders already on track or currently selected (in start trigger).
-  // Finish: show all riders — badges (on track / finished) communicate status.
-  const baseRiders = mode === 'start'
-    ? riders.filter(r => !onTrackIds.has(r.id) && r.id !== selectedRider?.id)
-    : riders;
+  // Both modes show all riders. Status badges + a disabled (locked) row
+  // communicate who is on track (Start) or already finished (Finish).
+  const baseRiders = riders;
 
   const filteredRiders = searchQuery.trim()
     ? baseRiders.filter(r =>
@@ -621,9 +625,7 @@ export default function App() {
   const hasBeam    = isFinish && pendingFinishes.length > 0;
   const queuedMore = pendingFinishes.length - 1;
 
-  // Lookups for rendering the on-track list / per-rider status badges.
-  const riderNoById: Record<number, string> = {};
-  riders.forEach(r => { riderNoById[r.id] = r.rider_no; });
+  // Lookups for per-rider status badges in the list.
   const onTrackByRider: Record<number, OnTrackEntry> = {};
   onTrack.forEach(e => { onTrackByRider[e.riderId] = e; });
   const finishedByRider: Record<number, FinishedRider> = {};
@@ -698,37 +700,6 @@ export default function App() {
         </View>
       )}
 
-      {/* Riders on track with live runtime — Start mode only */}
-      {!isFinish && onTrack.length > 0 && (
-        <View style={s.trackCard}>
-          <Text style={s.trackTitle}>
-            🚴 On Track · {onTrack.length}{wsConnected ? ' · live' : ' · local'}
-          </Text>
-          <ScrollView style={{ maxHeight: 170 }} nestedScrollEnabled keyboardShouldPersistTaps="handled">
-            {onTrack.map(e => (
-              <View key={e.key} style={s.trackRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={s.trackName} numberOfLines={1}>
-                    #{riderNoById[e.riderId] ?? ''}  {e.name ?? ''}
-                  </Text>
-                  <Text style={s.trackMeta}>S{e.stage}</Text>
-                </View>
-                <Text style={s.trackTimer}>{fmtElapsed(nowTick - e.startTs)}</Text>
-                {!wsConnected && (
-                  <TouchableOpacity
-                    style={s.trackRemove}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    onPress={() => removeFromTrack(e.key)}
-                  >
-                    <Text style={s.trackRemoveTxt}>✕</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            ))}
-          </ScrollView>
-        </View>
-      )}
-
 
       {/* Rider list */}
       <FlatList
@@ -738,30 +709,34 @@ export default function App() {
         keyboardShouldPersistTaps="handled"
         extraData={`${nowTick}|${onTrack.length}|${selectedRider?.id}|${hasBeam}|${finishedRiders.length}`}
         renderItem={({ item }) => {
-          const isSel     = selectedRider?.id === item.id;
-          const ot        = onTrackByRider[item.id];
-          const fin       = finishedByRider[item.id];
-          const isFinishedRider = !!fin;
+          const isSel = selectedRider?.id === item.id;
+          const ot    = onTrackByRider[item.id];
+          const fin   = finishedByRider[item.id];
+          // Start: a rider already on track is locked (started, ticking).
+          // Finish: a rider already finished is locked (result recorded).
+          const startLocked  = !isFinish && !!ot;
+          const finishLocked = isFinish && !!fin;
+          const locked = startLocked || finishLocked;
           return (
             <TouchableOpacity
               style={[
                 s.riderItem,
-                isFinishedRider ? s.riderItemFinished : (isSel && s.riderItemSel),
-                !isFinishedRider && hasBeam && s.riderItemAssign,
-                !isFinishedRider && ot && s.riderItemOnTrack,
+                locked ? s.riderItemFinished : (isSel && s.riderItemSel),
+                !locked && hasBeam && s.riderItemAssign,
+                !locked && ot && s.riderItemOnTrack,
               ]}
               onPress={() => {
-                if (isFinishedRider) return;
+                if (locked) return;
                 if (isFinish && hasBeam) assignFinish(item);
                 else if (!isFinish)      setSelected(item);
               }}
-              activeOpacity={isFinishedRider ? 1 : (!isFinish || hasBeam ? 0.65 : 1)}
+              activeOpacity={locked ? 1 : (!isFinish || hasBeam ? 0.65 : 1)}
             >
               <View style={s.riderRowTop}>
-                <Text style={[s.riderName, !isFinishedRider && isSel && s.riderNameSel, isFinishedRider && s.riderNameDone]}>
+                <Text style={[s.riderName, !locked && isSel && s.riderNameSel, locked && s.riderNameDone]}>
                   #{item.rider_no ?? ''}  {item.name ?? ''}
                 </Text>
-                {isFinishedRider ? (
+                {finishLocked ? (
                   <Text style={s.riderFinishedTag}>● Finished · {formatFinishTime(fin.finishTs)}</Text>
                 ) : ot ? (
                   <Text style={s.riderOnTrackTag}>● on track · {fmtElapsed(nowTick - ot.startTs)}</Text>
