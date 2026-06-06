@@ -35,13 +35,14 @@ function toMysqlDatetime(d: Date): string {
     `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
 }
 
-// Parse 'YYYY-MM-DD HH:MM:SS.mmm' (device-local, no timezone) → epoch ms.
-// Used for start times arriving from the server (recorded by another device).
-function parseMysqlLocal(s: string): number {
-  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?/.exec(s);
-  if (!m) { const t = Date.parse(s); return isNaN(t) ? Date.now() : t; }
-  const ms = m[7] ? parseInt(m[7].padEnd(3, '0').slice(0, 3), 10) : 0;
-  return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6], ms).getTime();
+// Parse a server start_time → absolute epoch ms. mysql2 returns DATETIME
+// columns as ISO-8601 UTC strings (e.g. '2026-06-06T03:09:00.060Z'), so
+// Date.parse honours the timezone and yields the true instant. This is
+// timezone-independent on the viewing side, since we compare against
+// Date.now() (also absolute epoch).
+function parseServerTs(s: string): number {
+  const t = Date.parse(s);
+  return isNaN(t) ? Date.now() : t;
 }
 
 // Elapsed ms → MM:SS, or H:MM:SS past an hour.
@@ -286,7 +287,7 @@ export default function App() {
                 riderId: r.rider_id,
                 name: r.name,
                 stage: r.stage,
-                startTs: r.start_time ? parseMysqlLocal(r.start_time) : Date.now(),
+                startTs: r.start_time ? parseServerTs(r.start_time) : Date.now(),
               })));
             }
             break;
