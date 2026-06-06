@@ -29,6 +29,34 @@ db.getConnection((err, conn) => {
     conn.release();
 });
 
+// Current riders on track, with start_time recovered from the active
+// 25_times row (stop_time IS NULL) — avoids needing a schema change.
+function queryOnTrack(cb) {
+    const sql =
+        'SELECT rot.rider_id, rot.name, rot.team, rot.category, rot.stage, t.start_time ' +
+        'FROM riders_on_track rot ' +
+        'LEFT JOIN 25_times t ON t.rider_id = rot.rider_id AND t.stage = rot.stage AND t.stop_time IS NULL ' +
+        'ORDER BY t.start_time';
+    db.query(sql, (err, rows) => {
+        if (err) { console.error('on_track query error:', err.message); cb([]); return; }
+        cb(rows || []);
+    });
+}
+
+function sendOnTrack(client) {
+    queryOnTrack((rows) => {
+        if (client.readyState === WebSocket.OPEN)
+            client.send(JSON.stringify({ type: 'riders_on_track', data: rows }));
+    });
+}
+
+function broadcastOnTrack() {
+    queryOnTrack((rows) => {
+        const payload = JSON.stringify({ type: 'riders_on_track', data: rows });
+        wss.clients.forEach((c) => { if (c.readyState === WebSocket.OPEN) c.send(payload); });
+    });
+}
+
 wss.on('connection', (ws) => {
     console.log('Client connected');
 
@@ -95,6 +123,10 @@ wss.on('connection', (ws) => {
                         }
                         ws.send(JSON.stringify({ type: 'riders_data', data: results }));
                     });
+                    break;
+
+                case 'get_riders_on_track':
+                    sendOnTrack(ws);
                     break;
 
                 case 'update_rider':
@@ -189,6 +221,7 @@ wss.on('connection', (ws) => {
                                                     console.log(err.message);
                                                 } else {
                                                     console.log('inserted to riders on track table');
+                                                    broadcastOnTrack();
                                                 }
                                             });
                                         console.log('Rider found, sent to clients for live timing.', results[0].name);
@@ -227,6 +260,7 @@ wss.on('connection', (ws) => {
                                             console.error("Query error:", err);
                                             return;
                                         } else {
+                                            broadcastOnTrack();
                                             db.query('call 25_get_race_result(?,?)',
                                                 [data.stage, data.category],
                                                 (err, resultRace) => {

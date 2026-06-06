@@ -14,7 +14,7 @@ type Screen     = 'setup' | 'bt' | 'race';
 type RaceSettings = { stage: number; category: string; };
 type QueuedEvent  = { id: string; payload: Record<string, unknown>; savedAt: string; };
 type FinishEntry  = { timestamp: string };
-type OnTrackEntry = { key: string; rider: Rider; startTs: number; stage: number };
+type OnTrackEntry = { key: string; riderId: number; name: string; stage: number; startTs: number };
 type DropItem     = { label: string; value: string };
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
@@ -33,6 +33,15 @@ function toMysqlDatetime(d: Date): string {
   const p = (n: number, z = 2) => String(n).padStart(z, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
     `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+}
+
+// Parse 'YYYY-MM-DD HH:MM:SS.mmm' (device-local, no timezone) → epoch ms.
+// Used for start times arriving from the server (recorded by another device).
+function parseMysqlLocal(s: string): number {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?/.exec(s);
+  if (!m) { const t = Date.parse(s); return isNaN(t) ? Date.now() : t; }
+  const ms = m[7] ? parseInt(m[7].padEnd(3, '0').slice(0, 3), 10) : 0;
+  return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6], ms).getTime();
 }
 
 // Elapsed ms → MM:SS, or H:MM:SS past an hour.
@@ -140,12 +149,12 @@ export default function App() {
     live.current = { selectedRider, mode, raceSettings, pendingFinishes };
   }, [selectedRider, mode, raceSettings, pendingFinishes]);
 
-  // 1 s ticker drives the live runtime of riders on track (start mode only).
+  // 1 s ticker drives the live runtime of riders on track (both modes).
   useEffect(() => {
-    if (mode !== 'start' || onTrack.length === 0) return;
+    if (onTrack.length === 0) return;
     const id = setInterval(() => setNowTick(Date.now()), 1000);
     return () => clearInterval(id);
-  }, [mode, onTrack.length]);
+  }, [onTrack.length]);
 
   // Persist on-track list so a crash/restart keeps the running clocks.
   // Skip until the initial load has hydrated, so we don't clobber stored data.
@@ -155,8 +164,14 @@ export default function App() {
     AsyncStorage.setItem(ONTRACK_KEY, JSON.stringify(onTrack)).catch(() => {});
   }, [onTrack]);
 
+  // Optimistic local add (keyed by rider+stage so the server snapshot reconciles
+  // cleanly). When online the server echoes a fresh snapshot that replaces this.
   const addToTrack = useCallback((rider: Rider, startTs: number, stage: number) => {
-    setOnTrack(prev => [{ key: `${rider.id}-${startTs}`, rider, startTs, stage }, ...prev]);
+    setOnTrack(prev => {
+      const key = `${rider.id}-${stage}`;
+      return [{ key, riderId: rider.id, name: rider.name, stage, startTs },
+              ...prev.filter(e => e.key !== key)];
+    });
   }, []);
 
   const removeFromTrack = useCallback((key: string) => {
@@ -241,6 +256,7 @@ export default function App() {
     socket.send('get_race_info');
     socket.send('get_category_list');
     socket.send(JSON.stringify({ action: 'get_data' }));
+    socket.send(JSON.stringify({ action: 'get_riders_on_track' }));
   };
 
   const connectWs = useCallback(() => {
@@ -260,6 +276,19 @@ export default function App() {
         switch (d.type) {
           case 'riders_data':
             cacheRiders(d.data);
+            break;
+          case 'riders_on_track':
+            // Server is authoritative when online: this reflects starts AND
+            // finishes from every device, so it replaces the local list.
+            if (Array.isArray(d.data)) {
+              setOnTrack(d.data.map((r: any) => ({
+                key: `${r.rider_id}-${r.stage}`,
+                riderId: r.rider_id,
+                name: r.name,
+                stage: r.stage,
+                startTs: r.start_time ? parseMysqlLocal(r.start_time) : Date.now(),
+              })));
+            }
             break;
           case 'result_race_info': {
             const count = parseInt(d.data?.stages) || 10;
@@ -568,6 +597,12 @@ export default function App() {
   const hasBeam    = isFinish && pendingFinishes.length > 0;
   const queuedMore = pendingFinishes.length - 1;
 
+  // Lookups for rendering the on-track list / per-rider status badges.
+  const riderNoById: Record<number, string> = {};
+  riders.forEach(r => { riderNoById[r.id] = r.rider_no; });
+  const onTrackByRider: Record<number, OnTrackEntry> = {};
+  onTrack.forEach(e => { onTrackByRider[e.riderId] = e; });
+
   return (
     <SafeAreaView style={s.container}>
 
@@ -637,27 +672,31 @@ export default function App() {
         </View>
       )}
 
-      {/* START — riders on track with live runtime */}
-      {!isFinish && onTrack.length > 0 && (
+      {/* Riders on track with live runtime — shared across devices when online */}
+      {onTrack.length > 0 && (
         <View style={s.trackCard}>
-          <Text style={s.trackTitle}>🚴 On Track · {onTrack.length}</Text>
+          <Text style={s.trackTitle}>
+            🚴 On Track · {onTrack.length}{wsConnected ? ' · live' : ' · local'}
+          </Text>
           <ScrollView style={{ maxHeight: 170 }} nestedScrollEnabled keyboardShouldPersistTaps="handled">
             {onTrack.map(e => (
               <View key={e.key} style={s.trackRow}>
                 <View style={{ flex: 1 }}>
                   <Text style={s.trackName} numberOfLines={1}>
-                    #{e.rider.rider_no ?? ''}  {e.rider.name ?? ''}
+                    #{riderNoById[e.riderId] ?? ''}  {e.name ?? ''}
                   </Text>
                   <Text style={s.trackMeta}>S{e.stage}</Text>
                 </View>
                 <Text style={s.trackTimer}>{fmtElapsed(nowTick - e.startTs)}</Text>
-                <TouchableOpacity
-                  style={s.trackRemove}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  onPress={() => removeFromTrack(e.key)}
-                >
-                  <Text style={s.trackRemoveTxt}>✕</Text>
-                </TouchableOpacity>
+                {!wsConnected && (
+                  <TouchableOpacity
+                    style={s.trackRemove}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    onPress={() => removeFromTrack(e.key)}
+                  >
+                    <Text style={s.trackRemoveTxt}>✕</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             ))}
           </ScrollView>
@@ -674,20 +713,27 @@ export default function App() {
         keyExtractor={item => String(item.id)}
         style={s.riderList}
         keyboardShouldPersistTaps="handled"
+        extraData={`${nowTick}|${onTrack.length}|${selectedRider?.id}|${hasBeam}`}
         renderItem={({ item }) => {
           const isSel = selectedRider?.id === item.id;
+          const ot    = onTrackByRider[item.id];
           return (
             <TouchableOpacity
-              style={[s.riderItem, isSel && s.riderItemSel, hasBeam && s.riderItemAssign]}
+              style={[s.riderItem, isSel && s.riderItemSel, hasBeam && s.riderItemAssign, ot && s.riderItemOnTrack]}
               onPress={() => {
                 if (isFinish && hasBeam) assignFinish(item);
                 else if (!isFinish)      setSelected(item);
               }}
               activeOpacity={!isFinish || hasBeam ? 0.65 : 1}
             >
-              <Text style={[s.riderName, isSel && s.riderNameSel]}>
-                #{item.rider_no ?? ''}  {item.name ?? ''}
-              </Text>
+              <View style={s.riderRowTop}>
+                <Text style={[s.riderName, isSel && s.riderNameSel]}>
+                  #{item.rider_no ?? ''}  {item.name ?? ''}
+                </Text>
+                {ot && (
+                  <Text style={s.riderOnTrackTag}>● on track · {fmtElapsed(nowTick - ot.startTs)}</Text>
+                )}
+              </View>
               <Text style={s.riderMeta}>{item.team ?? ''}  ·  {item.category ?? ''}</Text>
             </TouchableOpacity>
           );
@@ -785,8 +831,11 @@ const s = StyleSheet.create({
   riderItem:      { backgroundColor: '#16213e', borderRadius: 8, padding: 12, marginBottom: 5, borderWidth: 2, borderColor: 'transparent' },
   riderItemSel:   { borderColor: '#e94560', backgroundColor: '#2a0a14' },
   riderItemAssign:{ borderColor: '#f0a500', backgroundColor: '#1e1600' },
-  riderName:      { color: '#fff', fontSize: 15, fontWeight: '600' },
+  riderItemOnTrack:{ borderColor: '#1f6f3f' },
+  riderRowTop:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  riderName:      { color: '#fff', fontSize: 15, fontWeight: '600', flexShrink: 1 },
   riderNameSel:   { color: '#e94560' },
+  riderOnTrackTag:{ color: '#4caf50', fontSize: 12, fontWeight: '700', fontVariant: ['tabular-nums'] },
   riderMeta:      { color: '#666', fontSize: 12, marginTop: 2 },
   eventBox:       { backgroundColor: '#16213e', borderRadius: 8, padding: 12, marginVertical: 6, minHeight: 48, justifyContent: 'center' },
   eventTxt:       { color: '#ccc', fontSize: 13, textAlign: 'center' },
