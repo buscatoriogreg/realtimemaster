@@ -290,11 +290,17 @@ wss.on('connection', (ws) => {
                                             return;
                                         } else {
                                             broadcastOnTrack();
-                                            broadcastFinishedRiders(data.stage);
+                                            // 25_get_race_result is what computes diff_time
+                                            // (UPDATE … SET diff_time = TIMEDIFF(…)). The finished
+                                            // list must therefore be broadcast only AFTER the proc
+                                            // returns — otherwise diff_time is still NULL and the
+                                            // just-finished rider is filtered out of the finished
+                                            // query, so clients never see the result.
                                             db.query('call 25_get_race_result(?,?)',
                                                 [data.stage, data.category],
                                                 (err, resultRace) => {
-                                                    if (err) return;
+                                                    broadcastFinishedRiders(data.stage);
+                                                    if (err) { console.error('race_result error:', err.message); return; }
                                                     // Send to ALL clients (broadcast)
                                                     wss.clients.forEach((client) => {
                                                         if (client.readyState === WebSocket.OPEN) {
