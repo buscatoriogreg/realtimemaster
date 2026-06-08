@@ -210,14 +210,19 @@ wss.on('connection', (ws) => {
                         [data.rider_id, data.stage, data.start_time],
                         (err, result) => {
                             if (err) {
-
-                                wss.clients.forEach((client) => {
-                                    if (client.readyState === WebSocket.OPEN) {
-                                        client.send(JSON.stringify({
-                                            type: 'error', message: err.message
-                                        }));
-                                    }
-                                });
+                                // Reply only to the device that sent the start, and
+                                // identify the rider/stage, so it can undo its
+                                // optimistic clock on a duplicate without disturbing
+                                // other devices' running timers.
+                                if (ws.readyState === WebSocket.OPEN) {
+                                    ws.send(JSON.stringify({
+                                        type: 'error',
+                                        action: 'insert_start_time',
+                                        rider_id: data.rider_id,
+                                        stage: data.stage,
+                                        message: err.message
+                                    }));
+                                }
 
                                 console.log(err.message);
                             }

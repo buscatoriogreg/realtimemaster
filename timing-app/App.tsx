@@ -156,10 +156,16 @@ export default function App() {
   const shouldReconnect = useRef(false);
 
   // BT listener reads latest state via ref — avoids stale closure
-  const live = useRef({ selectedRider, mode, raceSettings, pendingFinishes });
+  const live = useRef({ selectedRider, mode, raceSettings, pendingFinishes, onTrack });
   useEffect(() => {
-    live.current = { selectedRider, mode, raceSettings, pendingFinishes };
-  }, [selectedRider, mode, raceSettings, pendingFinishes]);
+    live.current = { selectedRider, mode, raceSettings, pendingFinishes, onTrack };
+  }, [selectedRider, mode, raceSettings, pendingFinishes, onTrack]);
+
+  // What each optimistic start replaced, keyed by rider+stage. If the server
+  // rejects the start (e.g. "Duplicate entry" — the rider already started this
+  // stage), we restore this so a clock that was already ticking is NOT reset,
+  // and a brand-new phantom entry is removed instead of left running.
+  const pendingStarts = useRef<Record<string, OnTrackEntry | null>>({});
 
   // Live runtime ticker (ms precision). Aligned to wall-clock 100 ms
   // boundaries via setTimeout rather than a free-running setInterval, so two
@@ -369,6 +375,18 @@ export default function App() {
             break;
           case 'error':
             setLastEvent('❌ ' + d.message);
+            // A rejected start (e.g. "Duplicate entry" — already started this
+            // stage) must not leave a reset/phantom clock ticking. Undo the
+            // optimistic add: restore the prior entry if the rider was already
+            // on track, otherwise drop the entry entirely.
+            if (d.action === 'insert_start_time' && d.rider_id != null) {
+              const key = `${d.rider_id}-${d.stage}`;
+              const prev = pendingStarts.current[key];
+              setOnTrack(list => prev
+                ? list.map(e => (e.key === key ? prev : e))
+                : list.filter(e => e.key !== key));
+              delete pendingStarts.current[key];
+            }
             break;
         }
       } catch {}
@@ -469,6 +487,10 @@ export default function App() {
     } else {
       enqueue(payload).then(n => setLastEvent(`📦 Offline (${n}): 🚦 #${rider.rider_no} ${rider.name}`));
     }
+    // Remember what this optimistic start overwrites so it can be undone if the
+    // server rejects it (duplicate start) — without restarting a running clock.
+    const key = `${rider.id}-${rs.stage}`;
+    pendingStarts.current[key] = live.current.onTrack.find(e => e.key === key) ?? null;
     addToTrack(rider, startDate.getTime(), rs.stage);
   };
 
