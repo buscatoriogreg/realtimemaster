@@ -212,18 +212,25 @@ export default function App() {
 
   const categoryItems: DropItem[] = categories.map(c => ({ label: c, value: c }));
 
-  const onTrackIds  = new Set(onTrack.map(e => e.riderId));
-  const finishedIds = new Set(finishedRiders.map(e => e.riderId));
-  // Category scoping applies to the START sheet only — it lets the starter
-  // see just the group lining up. The FINISH line is shared across every
-  // category, so the operator must be able to tap whoever crosses; filtering
-  // finish mode by category hides on-track riders of other groups and makes
-  // it impossible to record their finish. So finish mode shows all riders.
-  // Stage is reflected per-rider via the on-track / finished status (both
-  // keyed by stage). Ordered by rider number (numeric), like a start sheet.
+  // Rider list scope, by mode:
+  //  • START  — the category "start sheet": every rider of the selected category.
+  //  • FINISH — only riders on the selected Stage AND Category: those currently
+  //    on track for this stage, or who already finished it. That's exactly the
+  //    field that can cross the line, so the operator isn't hunting the whole
+  //    roster. Riders carry a category but no stage, so the stage dimension is
+  //    expressed through on-track / finished membership (both keyed by stage).
+  // Ordered by rider number (numeric), like a start sheet.
   const cat = String(raceSettings.category ?? '').trim().toLowerCase();
+  const matchesCat = (r: Rider) =>
+    !cat || String(r.category ?? '').trim().toLowerCase() === cat;
+  const stageOnTrackIds  = new Set(
+    onTrack.filter(e => e.stage === raceSettings.stage).map(e => e.riderId));
+  const stageFinishedIds = new Set(
+    finishedRiders.filter(e => e.stage === raceSettings.stage).map(e => e.riderId));
   const baseRiders = [...riders]
-    .filter(r => mode === 'finish' || !cat || String(r.category ?? '').trim().toLowerCase() === cat)
+    .filter(r => mode === 'finish'
+      ? matchesCat(r) && (stageOnTrackIds.has(r.id) || stageFinishedIds.has(r.id))
+      : matchesCat(r))
     .sort((a, b) => (parseInt(a.rider_no, 10) || 0) - (parseInt(b.rider_no, 10) || 0));
 
   const filteredRiders = searchQuery.trim()
