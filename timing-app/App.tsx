@@ -513,7 +513,7 @@ export default function App() {
 
           {/* Title bar */}
           <View style={s.titleBar}>
-            <Text style={s.title}>⏱ Real Timer Master</Text>
+            <Text style={s.title}>⏱ Real Time Master</Text>
             <TouchableOpacity style={s.gearBtn} onPress={() => setShowSt(v => !v)}>
               <Text style={s.gearTxt}>⚙</Text>
             </TouchableOpacity>
