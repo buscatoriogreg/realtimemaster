@@ -223,14 +223,8 @@ export default function App() {
   const cat = String(raceSettings.category ?? '').trim().toLowerCase();
   const matchesCat = (r: Rider) =>
     !cat || String(r.category ?? '').trim().toLowerCase() === cat;
-  const stageOnTrackIds  = new Set(
-    onTrack.filter(e => e.stage === raceSettings.stage).map(e => e.riderId));
-  const stageFinishedIds = new Set(
-    finishedRiders.filter(e => e.stage === raceSettings.stage).map(e => e.riderId));
   const baseRiders = [...riders]
-    .filter(r => mode === 'finish'
-      ? matchesCat(r) && (stageOnTrackIds.has(r.id) || stageFinishedIds.has(r.id))
-      : matchesCat(r))
+    .filter(r => matchesCat(r))
     .sort((a, b) => (parseInt(a.rider_no, 10) || 0) - (parseInt(b.rider_no, 10) || 0));
 
   const filteredRiders = searchQuery.trim()
