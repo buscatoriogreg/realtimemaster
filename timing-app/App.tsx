@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, FlatList, StyleSheet, Alert,
-  PermissionsAndroid, Platform, TextInput, StatusBar, SafeAreaView, ScrollView,
+  PermissionsAndroid, Platform, StatusBar, SafeAreaView, ScrollView,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import RNBluetoothClassic from 'react-native-bluetooth-classic';
@@ -126,7 +126,7 @@ const ds = StyleSheet.create({
 // ── App ───────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [wsUrl, setWsUrl]         = useState('ws://realtimemaster.com:3000');
+  const [wsUrl]                   = useState('ws://realtimemaster.com:3000');
   const [wsConnected, setWsConn]  = useState(false);
   const [showSettings, setShowSt] = useState(false);
   const [mode, setMode]           = useState<Mode>('start');
@@ -210,7 +210,10 @@ export default function App() {
   const finishedIds = new Set(finishedRiders.map(e => e.riderId));
   // Both modes show all riders. Status badges + a disabled (locked) row
   // communicate who is on track (Start) or already finished (Finish).
-  const baseRiders = riders;
+  // Ordered by rider number (numeric), so the list reads like a start sheet.
+  const baseRiders = [...riders].sort(
+    (a, b) => (parseInt(a.rider_no, 10) || 0) - (parseInt(b.rider_no, 10) || 0)
+  );
 
   const filteredRiders = searchQuery.trim()
     ? baseRiders.filter(r =>
@@ -510,7 +513,7 @@ export default function App() {
 
           {/* Title bar */}
           <View style={s.titleBar}>
-            <Text style={s.title}>⏱ Race Timing</Text>
+            <Text style={s.title}>⏱ Real Timer Master</Text>
             <TouchableOpacity style={s.gearBtn} onPress={() => setShowSt(v => !v)}>
               <Text style={s.gearTxt}>⚙</Text>
             </TouchableOpacity>
@@ -524,13 +527,19 @@ export default function App() {
             </Text>
           </View>
 
-          {/* Hidden settings (server URL) */}
+          {/* Hidden settings (device mode + reconnect) */}
           {showSettings && (
             <View style={s.settingsPanel}>
-              <Text style={s.label}>Server URL</Text>
-              <TextInput style={s.input} value={wsUrl} onChangeText={setWsUrl}
-                placeholder="ws://realtimemaster.com:3000" placeholderTextColor="#555"
-                autoCapitalize="none" keyboardType="url" />
+              <Text style={s.label}>Device Mode</Text>
+              <View style={s.modeRow}>
+                {(['start', 'finish'] as Mode[]).map(m => (
+                  <TouchableOpacity key={m} style={[s.modeBtn, mode === m && s.modeBtnOn]} onPress={() => setMode(m)}>
+                    <Text style={[s.modeTxt, mode === m && s.modeTxtOn]}>
+                      {m === 'start' ? '🚦 START' : '🏁 FINISH'}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
               <TouchableOpacity style={s.btn} onPress={() => {
                 shouldReconnect.current = true;
                 connectWs();
@@ -559,18 +568,6 @@ export default function App() {
             onChange={onCategoryChange}
             disabled={categoryItems.length === 0}
           />
-
-          {/* Mode */}
-          <Text style={s.label}>Device Mode</Text>
-          <View style={s.modeRow}>
-            {(['start', 'finish'] as Mode[]).map(m => (
-              <TouchableOpacity key={m} style={[s.modeBtn, mode === m && s.modeBtnOn]} onPress={() => setMode(m)}>
-                <Text style={[s.modeTxt, mode === m && s.modeTxtOn]}>
-                  {m === 'start' ? '🚦 START' : '🏁 FINISH'}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
 
           {/* Offline cache status */}
           <View style={s.cacheBox}>
