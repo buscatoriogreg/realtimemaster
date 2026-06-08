@@ -208,12 +208,16 @@ export default function App() {
 
   const onTrackIds  = new Set(onTrack.map(e => e.riderId));
   const finishedIds = new Set(finishedRiders.map(e => e.riderId));
-  // Both modes show all riders. Status badges + a disabled (locked) row
-  // communicate who is on track (Start) or already finished (Finish).
-  // Ordered by rider number (numeric), so the list reads like a start sheet.
-  const baseRiders = [...riders].sort(
-    (a, b) => (parseInt(a.rider_no, 10) || 0) - (parseInt(b.rider_no, 10) || 0)
-  );
+  // Scope the list to the current race Category — riders carry a category,
+  // while Stage is reflected per-rider via the on-track / finished status
+  // (both keyed by stage). With no category selected, show everyone.
+  // Status badges + a disabled (locked) row communicate who is on track
+  // (Start) or already finished (Finish). Ordered by rider number (numeric),
+  // so the list reads like a start sheet.
+  const cat = String(raceSettings.category ?? '').trim().toLowerCase();
+  const baseRiders = [...riders]
+    .filter(r => !cat || String(r.category ?? '').trim().toLowerCase() === cat)
+    .sort((a, b) => (parseInt(a.rider_no, 10) || 0) - (parseInt(b.rider_no, 10) || 0));
 
   const filteredRiders = searchQuery.trim()
     ? baseRiders.filter(r =>
