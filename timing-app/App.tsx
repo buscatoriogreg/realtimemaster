@@ -126,7 +126,7 @@ const ds = StyleSheet.create({
 // ── App ───────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [wsUrl]                   = useState('ws://realtimemaster.com:3000');
+  const [wsUrl]                   = useState('wss://realtimemaster.com/ws');
   const [wsConnected, setWsConn]  = useState(false);
   const [showSettings, setShowSt] = useState(false);
   const [mode, setMode]           = useState<Mode>('start');

@@ -47,7 +47,7 @@ jobs:
           cp timing-app/babel.config.js           TimingApp/babel.config.js
           cp timing-app/tsconfig.json             TimingApp/tsconfig.json
           cp timing-app/react-native.config.js    TimingApp/react-native.config.js
-          # Manifest: needed for Bluetooth permissions + usesCleartextTraffic (ws://)
+          # Manifest: needed for Bluetooth permissions (wss:// — no cleartext needed)
           cp timing-app/android/app/src/main/AndroidManifest.xml \
              TimingApp/android/app/src/main/AndroidManifest.xml
           # App label only — leave the scaffold's styles.xml/icons untouched.

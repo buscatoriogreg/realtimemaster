@@ -4,10 +4,23 @@ const express = require("express");
 const http = require("http");
 const WebSocket = require('ws');
 const mysql = require("mysql2");
+const helmet = require("helmet");
+
+const ALLOWED_ORIGINS = (process.env.CORS_ORIGIN || '')
+    .split(',').map(s => s.trim()).filter(Boolean);
 
 const app = express();
+app.use(helmet());
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+
+const wss = new WebSocket.Server({
+    server,
+    verifyClient: ({ origin }) => {
+        if (!origin) return true; // allow non-browser clients (timing app)
+        if (ALLOWED_ORIGINS.length === 0) return true; // no restriction if not configured
+        return ALLOWED_ORIGINS.includes(origin);
+    }
+});
 
 app.use(express.static(__dirname + '/public'));
 
@@ -16,7 +29,7 @@ const db = mysql.createPool({
     user: process.env.DB_USER,
     password: process.env.DB_PASS,
     database: process.env.DB_NAME,
-    connectionLimit: 10
+    connectionLimit: 25
 });
 
 // Test DB connection
