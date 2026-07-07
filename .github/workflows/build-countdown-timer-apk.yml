@@ -34,6 +34,9 @@ jobs:
           key: gradle-countdown-${{ runner.os }}-${{ hashFiles('countdown-timer/**/*.gradle*', 'countdown-timer/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: gradle-countdown-${{ runner.os }}-
 
+      - name: Install Android SDK platform 35
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" >/dev/null
+
       - name: Make gradlew executable
         run: chmod +x countdown-timer/gradlew
 
