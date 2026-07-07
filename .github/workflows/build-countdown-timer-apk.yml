@@ -1,0 +1,74 @@
+name: Build Countdown Timer APK
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'countdown-timer/**'
+      - '.github/workflows/build-countdown-timer-apk.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write   # needed to create GitHub Releases
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-countdown-${{ runner.os }}-${{ hashFiles('countdown-timer/**/*.gradle*', 'countdown-timer/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-countdown-${{ runner.os }}-
+
+      - name: Make gradlew executable
+        run: chmod +x countdown-timer/gradlew
+
+      - name: Build debug APK
+        working-directory: countdown-timer
+        run: ./gradlew assembleDebug --no-daemon
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8"
+
+      - name: Rename APK
+        run: |
+          APK=$(find countdown-timer/app/build/outputs/apk/debug -name "*.apk" | head -1)
+          cp "$APK" CountdownTimer.apk
+
+      # Each build gets a versioned release; make_latest:true keeps
+      # /releases/latest/download/CountdownTimer.apk always pointing to newest build.
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: countdown-v${{ github.run_number }}
+          name: Countdown Timer v${{ github.run_number }}
+          body: |
+            Auto-built from `main` — build #${{ github.run_number }}.
+
+            **Direct download:** [CountdownTimer.apk](https://github.com/${{ github.repository }}/releases/latest/download/CountdownTimer.apk)
+
+            **Install:** enable *Install unknown apps* in Android Settings, then open the APK.
+          files: CountdownTimer.apk
+          make_latest: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          echo "## ✅ Countdown Timer APK Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Release:** countdown-v${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Direct APK:** https://github.com/${{ github.repository }}/releases/download/countdown-v${{ github.run_number }}/CountdownTimer.apk" >> $GITHUB_STEP_SUMMARY

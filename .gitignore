@@ -4,3 +4,7 @@ node_modules/
 timing-app/android/.gradle/
 timing-app/android/app/build/
 timing-app/android/build/
+countdown-timer/.gradle/
+countdown-timer/app/build/
+countdown-timer/build/
+countdown-timer/local.properties
