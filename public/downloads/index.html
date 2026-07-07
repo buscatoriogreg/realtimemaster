@@ -141,6 +141,26 @@
     <div id="size-badge" class="badge" style="display:none"></div>
   </div>
 
+  <!-- Countdown Timer card -->
+  <div class="section">
+    <h2>Countdown Timer</h2>
+  </div>
+  <div class="card">
+    <a id="dl-btn-countdown" class="download-btn" href="https://github.com/buscatoriogreg/realtimemaster/releases/download/countdown-v1/CountdownTimer.apk">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="7 10 12 15 17 10"/>
+        <line x1="12" y1="15" x2="12" y2="3"/>
+      </svg>
+      Download APK
+    </a>
+    <div class="meta">
+      <span id="ver-label">Version <span id="ver-countdown">…</span></span>
+      <span id="date-countdown">…</span>
+    </div>
+    <div id="size-badge-countdown" class="badge" style="display:none"></div>
+  </div>
+
   <!-- Install instructions -->
   <div class="section">
     <h2>How to install</h2>
@@ -200,6 +220,38 @@
       .catch(() => {
         document.getElementById('ver').textContent = 'latest';
         document.getElementById('date').textContent = '';
+      });
+
+    // Countdown Timer releases are tagged countdown-v1, countdown-v2, ... and
+    // never marked "latest" (that flag stays on the Race Timing releases),
+    // so find the newest one by listing releases and filtering the tag prefix.
+    const COUNTDOWN_APK_NAME = 'CountdownTimer.apk';
+
+    fetch(`https://api.github.com/repos/${REPO}/releases`)
+      .then(r => r.ok ? r.json() : null)
+      .then(releases => {
+        if (!releases) return;
+        const countdownReleases = releases.filter(r => r.tag_name.startsWith('countdown-'));
+        if (!countdownReleases.length) return;
+        const data = countdownReleases[0];
+
+        document.getElementById('ver-countdown').textContent = data.tag_name;
+        document.getElementById('date-countdown').textContent =
+          new Date(data.published_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+        document.getElementById('dl-btn-countdown').href =
+          `https://github.com/${REPO}/releases/download/${data.tag_name}/${COUNTDOWN_APK_NAME}`;
+
+        const asset = (data.assets || []).find(a => a.name === COUNTDOWN_APK_NAME);
+        if (asset) {
+          const mb = (asset.size / 1024 / 1024).toFixed(1);
+          const badge = document.getElementById('size-badge-countdown');
+          badge.textContent = `${mb} MB`;
+          badge.style.display = 'inline-block';
+        }
+      })
+      .catch(() => {
+        document.getElementById('ver-countdown').textContent = 'latest';
+        document.getElementById('date-countdown').textContent = '';
       });
 
     // QR code for this page
