@@ -59,10 +59,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface {
-                    CountdownScreen(
-                        onStart = { speakRiderReady() },
-                        onGo = { speakGo() }
-                    )
+                    CountdownScreen(onRiderReady = { speakRiderReady() })
                 }
             }
         }
@@ -70,10 +67,6 @@ class MainActivity : ComponentActivity() {
 
     private fun speakRiderReady() {
         tts?.speak("Rider Ready", TextToSpeech.QUEUE_FLUSH, null, "rider_ready")
-    }
-
-    private fun speakGo() {
-        tts?.speak("Go! Go! Go!", TextToSpeech.QUEUE_FLUSH, null, "go")
     }
 
     override fun onDestroy() {
@@ -85,7 +78,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun CountdownScreen(onStart: () -> Unit, onGo: () -> Unit) {
+fun CountdownScreen(onRiderReady: () -> Unit) {
     var selected by remember { mutableStateOf(DURATIONS[1]) }
     var remaining by remember { mutableStateOf(selected.seconds) }
     var isRunning by remember { mutableStateOf(false) }
@@ -108,11 +101,12 @@ fun CountdownScreen(onStart: () -> Unit, onGo: () -> Unit) {
                     }
                     remaining == 1 -> {
                         remaining = 0
-                        onGo()
+                        toneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP, 1000)
                     }
                     else -> {
                         // Zero was just shown for one tick; start the next lap.
                         remaining = selected.seconds
+                        onRiderReady()
                     }
                 }
             }
@@ -156,7 +150,7 @@ fun CountdownScreen(onStart: () -> Unit, onGo: () -> Unit) {
 
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Button(onClick = {
-                if (!isRunning) onStart()
+                if (!isRunning) onRiderReady()
                 isRunning = !isRunning
             }) {
                 Text(if (isRunning) "Pause" else "Start")
