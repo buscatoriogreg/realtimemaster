@@ -1,6 +1,9 @@
 package com.revosysinc.countdowntimer
 
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.os.Bundle
+import android.speech.tts.TextToSpeech
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -18,6 +21,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -29,6 +33,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import java.util.Locale
 
 data class DurationOption(val label: String, val seconds: Int)
 
@@ -40,31 +45,69 @@ private val DURATIONS = listOf(
 )
 
 class MainActivity : ComponentActivity() {
+    private var tts: TextToSpeech? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Keep the screen on for the entire lifetime of the app.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        tts = TextToSpeech(this) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                tts?.language = Locale.US
+            }
+        }
         setContent {
             MaterialTheme {
                 Surface {
-                    CountdownScreen()
+                    CountdownScreen(onGo = { speakGo() })
                 }
             }
         }
     }
+
+    private fun speakGo() {
+        tts?.speak("Go! Go! Go!", TextToSpeech.QUEUE_FLUSH, null, "go")
+    }
+
+    override fun onDestroy() {
+        tts?.stop()
+        tts?.shutdown()
+        tts = null
+        super.onDestroy()
+    }
 }
 
 @Composable
-fun CountdownScreen() {
+fun CountdownScreen(onGo: () -> Unit) {
     var selected by remember { mutableStateOf(DURATIONS[1]) }
     var remaining by remember { mutableStateOf(selected.seconds) }
     var isRunning by remember { mutableStateOf(false) }
+
+    val toneGenerator = remember { ToneGenerator(AudioManager.STREAM_MUSIC, 100) }
+    DisposableEffect(Unit) {
+        onDispose { toneGenerator.release() }
+    }
 
     LaunchedEffect(isRunning, selected) {
         if (isRunning) {
             while (true) {
                 delay(1000L)
-                remaining = if (remaining <= 1) selected.seconds else remaining - 1
+                when {
+                    remaining > 1 -> {
+                        remaining -= 1
+                        if (remaining == 10) {
+                            toneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP, 300)
+                        }
+                    }
+                    remaining == 1 -> {
+                        remaining = 0
+                        onGo()
+                    }
+                    else -> {
+                        // Zero was just shown for one tick; start the next lap.
+                        remaining = selected.seconds
+                    }
+                }
             }
         }
     }
