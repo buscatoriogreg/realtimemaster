@@ -95,7 +95,7 @@ fun CountdownScreen(onGo: () -> Unit) {
                 when {
                     remaining > 1 -> {
                         remaining -= 1
-                        if (remaining == 10) {
+                        if (remaining in 1..10) {
                             toneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP, 300)
                         }
                     }
