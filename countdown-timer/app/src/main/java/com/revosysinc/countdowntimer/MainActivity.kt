@@ -101,7 +101,9 @@ fun CountdownScreen(onRiderReady: () -> Unit) {
                     }
                     remaining == 1 -> {
                         remaining = 0
-                        toneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP, 1000)
+                        // TONE_PROP_BEEP ignores the duration arg (fixed-length click);
+                        // use a continuous CDMA tone so it actually sustains for 1s.
+                        toneGenerator.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 1000)
                     }
                     else -> {
                         // Zero was just shown for one tick; start the next lap.
