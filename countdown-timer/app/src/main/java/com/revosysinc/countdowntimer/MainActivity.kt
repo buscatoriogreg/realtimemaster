@@ -59,10 +59,17 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface {
-                    CountdownScreen(onGo = { speakGo() })
+                    CountdownScreen(
+                        onStart = { speakRiderReady() },
+                        onGo = { speakGo() }
+                    )
                 }
             }
         }
+    }
+
+    private fun speakRiderReady() {
+        tts?.speak("Rider Ready", TextToSpeech.QUEUE_FLUSH, null, "rider_ready")
     }
 
     private fun speakGo() {
@@ -78,7 +85,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun CountdownScreen(onGo: () -> Unit) {
+fun CountdownScreen(onStart: () -> Unit, onGo: () -> Unit) {
     var selected by remember { mutableStateOf(DURATIONS[1]) }
     var remaining by remember { mutableStateOf(selected.seconds) }
     var isRunning by remember { mutableStateOf(false) }
@@ -148,7 +155,10 @@ fun CountdownScreen(onGo: () -> Unit) {
         Spacer(modifier = Modifier.height(48.dp))
 
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            Button(onClick = { isRunning = !isRunning }) {
+            Button(onClick = {
+                if (!isRunning) onStart()
+                isRunning = !isRunning
+            }) {
                 Text(if (isRunning) "Pause" else "Start")
             }
             OutlinedButton(onClick = {
