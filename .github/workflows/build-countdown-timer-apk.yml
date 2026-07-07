@@ -48,6 +48,28 @@ jobs:
           APK=$(find countdown-timer/app/build/outputs/apk/debug -name "*.apk" | head -1)
           cp "$APK" CountdownTimer.apk
 
+      - name: Decode release keystore
+        run: echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/release.keystore"
+
+      - name: Build signed release AAB (for Play Store)
+        working-directory: countdown-timer
+        run: ./gradlew bundleRelease --no-daemon
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8"
+          RELEASE_KEYSTORE_PATH: ${{ runner.temp }}/release.keystore
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+
+      - name: Rename AAB
+        run: |
+          AAB=$(find countdown-timer/app/build/outputs/bundle/release -name "*.aab" | head -1)
+          cp "$AAB" CountdownTimer.aab
+
+      - name: Remove decoded keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.keystore"
+
       # Each build gets a versioned release; make_latest:true keeps
       # /releases/latest/download/CountdownTimer.apk always pointing to newest build.
       - name: Publish GitHub Release
@@ -58,17 +80,20 @@ jobs:
           body: |
             Auto-built from `main` — build #${{ github.run_number }}.
 
-            **Direct download:** [CountdownTimer.apk](https://github.com/${{ github.repository }}/releases/latest/download/CountdownTimer.apk)
+            **Sideload APK:** [CountdownTimer.apk](https://github.com/${{ github.repository }}/releases/latest/download/CountdownTimer.apk) — install directly on a device (enable *Install unknown apps* first).
 
-            **Install:** enable *Install unknown apps* in Android Settings, then open the APK.
-          files: CountdownTimer.apk
+            **Play Store upload:** CountdownTimer.aab — signed release bundle, download it and upload to Play Console.
+          files: |
+            CountdownTimer.apk
+            CountdownTimer.aab
           make_latest: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Summary
         run: |
-          echo "## ✅ Countdown Timer APK Published" >> $GITHUB_STEP_SUMMARY
+          echo "## ✅ Countdown Timer build published" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Release:** countdown-v${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Direct APK:** https://github.com/${{ github.repository }}/releases/download/countdown-v${{ github.run_number }}/CountdownTimer.apk" >> $GITHUB_STEP_SUMMARY
+          echo "**Sideload APK:** https://github.com/${{ github.repository }}/releases/download/countdown-v${{ github.run_number }}/CountdownTimer.apk" >> $GITHUB_STEP_SUMMARY
+          echo "**Play Store AAB:** https://github.com/${{ github.repository }}/releases/download/countdown-v${{ github.run_number }}/CountdownTimer.aab" >> $GITHUB_STEP_SUMMARY

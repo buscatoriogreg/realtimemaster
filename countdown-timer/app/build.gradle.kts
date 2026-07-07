@@ -3,21 +3,43 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// Release signing comes from environment variables (set as CI secrets) so the
+// keystore and its passwords never get committed to the repo. Debug/local
+// builds work fine without them; only `bundleRelease`/`assembleRelease` need them.
+val releaseKeystorePath: String? = System.getenv("RELEASE_KEYSTORE_PATH")
+val releaseKeystorePassword: String? = System.getenv("RELEASE_KEYSTORE_PASSWORD")
+val releaseKeyAlias: String? = System.getenv("RELEASE_KEY_ALIAS")
+val releaseKeyPassword: String? = System.getenv("RELEASE_KEY_PASSWORD")
+
 android {
-    namespace = "com.revosysinc.countdowntimer"
+    namespace = "com.realtimermaster.countdowntimer"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.revosysinc.countdowntimer"
+        applicationId = "com.realtimermaster.countdowntimer"
         minSdk = 24
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
     }
 
+    signingConfigs {
+        if (releaseKeystorePath != null) {
+            create("release") {
+                storeFile = file(releaseKeystorePath)
+                storePassword = releaseKeystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (releaseKeystorePath != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 

@@ -1,4 +1,4 @@
-package com.revosysinc.countdowntimer
+package com.realtimermaster.countdowntimer
 
 import android.media.AudioManager
 import android.media.ToneGenerator
