@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, FlatList, StyleSheet, Alert,
-  PermissionsAndroid, Platform, StatusBar, SafeAreaView, ScrollView,
+  PermissionsAndroid, Platform, StatusBar, SafeAreaView, ScrollView, Modal,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import RNBluetoothClassic from 'react-native-bluetooth-classic';
@@ -139,6 +139,7 @@ export default function App() {
   const [btConnected, setBtConn]     = useState(false);
   const [lastEvent, setLastEvent]    = useState('');
   const [screen, setScreen]          = useState<Screen>('setup');
+  const [showRaceSettings, setShowRaceSettings] = useState(false);
   const [pendingCount, setPending]   = useState(0);
   const [isSyncing, setSyncing]      = useState(false);
   const [searchQuery, setSearch]     = useState('');
@@ -214,17 +215,16 @@ export default function App() {
 
   // Rider list scope, by mode:
   //  • START  — the category "start sheet": every rider of the selected category.
-  //  • FINISH — only riders on the selected Stage AND Category: those currently
-  //    on track for this stage, or who already finished it. That's exactly the
-  //    field that can cross the line, so the operator isn't hunting the whole
-  //    roster. Riders carry a category but no stage, so the stage dimension is
-  //    expressed through on-track / finished membership (both keyed by stage).
+  //  • FINISH — every rider, any category: riders cross the line in bib-number
+  //    order regardless of which category started when, so the operator isn't
+  //    hunting across categories. assignFinish() falls back to the rider's own
+  //    category when tagging the result, so no category selection is needed here.
   // Ordered by rider number (numeric), like a start sheet.
   const cat = String(raceSettings.category ?? '').trim().toLowerCase();
   const matchesCat = (r: Rider) =>
     !cat || String(r.category ?? '').trim().toLowerCase() === cat;
   const baseRiders = [...riders]
-    .filter(r => matchesCat(r))
+    .filter(r => mode === 'finish' || matchesCat(r))
     .sort((a, b) => (parseInt(a.rider_no, 10) || 0) - (parseInt(b.rider_no, 10) || 0));
 
   const filteredRiders = searchQuery.trim()
@@ -698,7 +698,11 @@ export default function App() {
           <View style={[s.dot, btConnected ? s.dotGreen : s.dotRed]} />
           <View style={[s.dot, wsConnected ? s.dotGreen : s.dotRed]} />
         </View>
-        <Text style={s.stagePill}>S{raceSettings.stage} {raceSettings.category ? `· ${raceSettings.category}` : ''}</Text>
+        <TouchableOpacity style={s.stagePill} onPress={() => setShowRaceSettings(true)}>
+          <Text style={s.stagePillTxt}>
+            S{raceSettings.stage} {!isFinish && raceSettings.category ? `· ${raceSettings.category}` : ''}  ✎
+          </Text>
+        </TouchableOpacity>
       </View>
 
       {/* Sync bar */}
@@ -809,6 +813,48 @@ export default function App() {
         </Text>
       </View>
 
+      {/* Race settings modal — change Stage (and, on START, Category) without
+          leaving this screen. */}
+      <Modal
+        visible={showRaceSettings}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowRaceSettings(false)}
+      >
+        <View style={s.modalOverlay}>
+          <View style={s.modalCard}>
+            <Text style={s.modalTitle}>Race Settings</Text>
+
+            <Text style={s.label}>Stage</Text>
+            <Dropdown
+              label="Select stage…"
+              items={stageItems}
+              value={String(raceSettings.stage)}
+              onChange={onStageChange}
+            />
+
+            {!isFinish && (
+              <>
+                <Text style={s.label}>Category</Text>
+                <Dropdown
+                  label="Select category…"
+                  items={categoryItems}
+                  value={raceSettings.category}
+                  onChange={onCategoryChange}
+                  disabled={categoryItems.length === 0}
+                />
+              </>
+            )}
+
+            <TouchableOpacity
+              style={[s.btn, s.btnAccent, { marginTop: 16 }]}
+              onPress={() => setShowRaceSettings(false)}
+            >
+              <Text style={s.btnText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
     </SafeAreaView>
   );
@@ -860,7 +906,11 @@ const s = StyleSheet.create({
   raceHeader:     { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
   raceMode:       { flex: 1, color: '#fff', fontSize: 18, fontWeight: '700', textAlign: 'center' },
   statusDots:     { flexDirection: 'row', gap: 5 },
-  stagePill:      { backgroundColor: '#16213e', color: '#aaa', fontSize: 11, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, maxWidth: 120 },
+  stagePill:      { backgroundColor: '#16213e', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, maxWidth: 140 },
+  stagePillTxt:   { color: '#aaa', fontSize: 11 },
+  modalOverlay:   { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 20 },
+  modalCard:      { backgroundColor: '#1a1a2e', borderRadius: 12, padding: 18, borderWidth: 1, borderColor: '#2a3a4a' },
+  modalTitle:     { color: '#fff', fontSize: 18, fontWeight: '700', textAlign: 'center', marginBottom: 4 },
   syncBar:        { flexDirection: 'row', alignItems: 'center', backgroundColor: '#2a1f08', borderRadius: 8, padding: 10, marginBottom: 4, gap: 8 },
   syncBarTxt:     { flex: 1, color: '#f0a500', fontSize: 12 },
   syncNowBtn:     { backgroundColor: '#f0a500', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6 },
