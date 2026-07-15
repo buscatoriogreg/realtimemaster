@@ -825,14 +825,17 @@ export default function App() {
           <View style={s.modalCard}>
             <Text style={s.modalTitle}>Race Settings</Text>
 
-            <Text style={s.label}>Stage</Text>
-            <Dropdown
-              label="Select stage…"
-              items={stageItems}
-              value={String(raceSettings.stage)}
-              onChange={onStageChange}
-              disabled={!isFinish}
-            />
+            {isFinish && (
+              <>
+                <Text style={s.label}>Stage</Text>
+                <Dropdown
+                  label="Select stage…"
+                  items={stageItems}
+                  value={String(raceSettings.stage)}
+                  onChange={onStageChange}
+                />
+              </>
+            )}
 
             {!isFinish && (
               <>
