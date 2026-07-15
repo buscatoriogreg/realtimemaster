@@ -831,6 +831,7 @@ export default function App() {
               items={stageItems}
               value={String(raceSettings.stage)}
               onChange={onStageChange}
+              disabled={!isFinish}
             />
 
             {!isFinish && (
@@ -906,8 +907,8 @@ const s = StyleSheet.create({
   raceHeader:     { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
   raceMode:       { flex: 1, color: '#fff', fontSize: 18, fontWeight: '700', textAlign: 'center' },
   statusDots:     { flexDirection: 'row', gap: 5 },
-  stagePill:      { backgroundColor: '#16213e', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, maxWidth: 140 },
-  stagePillTxt:   { color: '#aaa', fontSize: 11 },
+  stagePill:      { backgroundColor: '#16213e', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10, maxWidth: 170 },
+  stagePillTxt:   { color: '#ddd', fontSize: 15, fontWeight: '700' },
   modalOverlay:   { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 20 },
   modalCard:      { backgroundColor: '#1a1a2e', borderRadius: 12, padding: 18, borderWidth: 1, borderColor: '#2a3a4a' },
   modalTitle:     { color: '#fff', fontSize: 18, fontWeight: '700', textAlign: 'center', marginBottom: 4 },
