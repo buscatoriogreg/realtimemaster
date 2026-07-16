@@ -679,9 +679,11 @@ export default function App() {
   const queuedMore = pendingFinishes.length - 1;
 
   // Lookups for per-rider status badges in the list.
-  // finishedByRider keyed by "riderId-stage" to support multi-stage races.
-  const onTrackByRider: Record<number, OnTrackEntry> = {};
-  onTrack.forEach(e => { onTrackByRider[e.riderId] = e; });
+  // Keyed by "riderId-stage" so a rider left on-track on a prior stage
+  // doesn't still show as on-track (with a running clock) once the
+  // selected stage moves on.
+  const onTrackByRider: Record<string, OnTrackEntry> = {};
+  onTrack.forEach(e => { onTrackByRider[`${e.riderId}-${e.stage}`] = e; });
   const finishedByRider: Record<string, FinishedRider> = {};
   finishedRiders.forEach(e => { finishedByRider[`${e.riderId}-${e.stage}`] = e; });
 
@@ -768,7 +770,7 @@ export default function App() {
         extraData={`${nowTick}|${onTrack.length}|${selectedRider?.id}|${hasBeam}|${finishedRiders.length}`}
         renderItem={({ item }) => {
           const isSel     = selectedRider?.id === item.id;
-          const ot        = onTrackByRider[item.id];
+          const ot        = onTrackByRider[`${item.id}-${raceSettings.stage}`];
           const fin       = finishedByRider[`${item.id}-${raceSettings.stage}`];
           const isOnTrack = !!ot && !fin;   // currently on course, no result yet
           const hasResult = !!fin;

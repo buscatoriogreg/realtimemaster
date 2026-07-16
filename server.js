@@ -15,6 +15,7 @@ const server = http.createServer(app);
 
 const wss = new WebSocket.Server({
     server,
+    perMessageDeflate: true, // compress JSON frames — helps a lot on slow (2G) links
     verifyClient: ({ origin }) => {
         if (!origin) return true; // allow non-browser clients (timing app)
         if (ALLOWED_ORIGINS.length === 0) return true; // no restriction if not configured
