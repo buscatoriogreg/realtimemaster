@@ -8,7 +8,7 @@ import RNBluetoothClassic from 'react-native-bluetooth-classic';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type Rider      = { id: number; rider_no: string; name: string; team: string; category: string; };
+type Rider      = { id: number; rider_no: string; name: string; team: string; category: string; start_order: number | null; };
 type Mode       = 'start' | 'finish';
 type Screen     = 'setup' | 'bt' | 'race';
 type RaceSettings = { stage: number; category: string; };
@@ -214,18 +214,27 @@ export default function App() {
   const categoryItems: DropItem[] = categories.map(c => ({ label: c, value: c }));
 
   // Rider list scope, by mode:
-  //  • START  — the category "start sheet": every rider of the selected category.
+  //  • START  — the category "start sheet": every rider of the selected category,
+  //    ordered by start_order (the official start sequence). Riders without a
+  //    start_order (not yet assigned one) sort to the end, by bib number.
   //  • FINISH — every rider, any category: riders cross the line in bib-number
   //    order regardless of which category started when, so the operator isn't
   //    hunting across categories. assignFinish() falls back to the rider's own
   //    category when tagging the result, so no category selection is needed here.
-  // Ordered by rider number (numeric), like a start sheet.
   const cat = String(raceSettings.category ?? '').trim().toLowerCase();
   const matchesCat = (r: Rider) =>
     !cat || String(r.category ?? '').trim().toLowerCase() === cat;
+  const byRiderNo = (a: Rider, b: Rider) =>
+    (parseInt(a.rider_no, 10) || 0) - (parseInt(b.rider_no, 10) || 0);
   const baseRiders = [...riders]
     .filter(r => mode === 'finish' || matchesCat(r))
-    .sort((a, b) => (parseInt(a.rider_no, 10) || 0) - (parseInt(b.rider_no, 10) || 0));
+    .sort((a, b) => {
+      if (mode !== 'start') return byRiderNo(a, b);
+      if (a.start_order == null && b.start_order == null) return byRiderNo(a, b);
+      if (a.start_order == null) return 1;
+      if (b.start_order == null) return -1;
+      return a.start_order - b.start_order;
+    });
 
   const filteredRiders = searchQuery.trim()
     ? baseRiders.filter(r =>
