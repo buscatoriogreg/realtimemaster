@@ -1,7 +1,5 @@
 package com.realtimermaster.countdowntimer
 
-import android.media.AudioManager
-import android.media.ToneGenerator
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.view.WindowManager
@@ -83,9 +81,9 @@ fun CountdownScreen(onRiderReady: () -> Unit) {
     var remaining by remember { mutableStateOf(selected.seconds) }
     var isRunning by remember { mutableStateOf(false) }
 
-    val toneGenerator = remember { ToneGenerator(AudioManager.STREAM_MUSIC, 100) }
+    val beeper = remember { Beeper() }
     DisposableEffect(Unit) {
-        onDispose { toneGenerator.release() }
+        onDispose { beeper.release() }
     }
 
     LaunchedEffect(isRunning, selected) {
@@ -96,14 +94,12 @@ fun CountdownScreen(onRiderReady: () -> Unit) {
                     remaining > 1 -> {
                         remaining -= 1
                         if (remaining in 1..10) {
-                            toneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP, 300)
+                            beeper.playShortBeep()
                         }
                     }
                     remaining == 1 -> {
                         remaining = 0
-                        // TONE_PROP_BEEP ignores the duration arg (fixed-length click);
-                        // use a continuous CDMA tone so it actually sustains for 1s.
-                        toneGenerator.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 1000)
+                        beeper.playFinalBeep()
                     }
                     else -> {
                         // Zero was just shown for one tick; start the next lap.
