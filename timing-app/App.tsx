@@ -148,6 +148,8 @@ export default function App() {
   const [onTrack, setOnTrack]          = useState<OnTrackEntry[]>([]);
   const [finishedRiders, setFinished]  = useState<FinishedRider[]>([]);
   const [nowTick, setNowTick]          = useState(Date.now());
+  const [showRawData, setShowRawData]  = useState(false);
+  const [rawDataText, setRawDataText]  = useState('');
 
   const ws              = useRef<WebSocket | null>(null);
   const btDevice        = useRef<any>(null);
@@ -282,6 +284,23 @@ export default function App() {
   const cacheCategories = useCallback((cats: string[]) => {
     setCategories(cats);
     AsyncStorage.setItem(CATS_KEY, JSON.stringify(cats)).catch(() => {});
+  }, []);
+
+  // ── Raw on-device storage viewer (debug) ──────────────────────────────────
+
+  const loadRawData = useCallback(async () => {
+    try {
+      const keys = (await AsyncStorage.getAllKeys()).filter(k => k.startsWith('@timing_'));
+      const pairs = await AsyncStorage.multiGet(keys);
+      const obj: Record<string, unknown> = {};
+      pairs.forEach(([k, v]) => {
+        try { obj[k] = v ? JSON.parse(v) : null; }
+        catch { obj[k] = v; }
+      });
+      setRawDataText(JSON.stringify(obj, null, 2));
+    } catch (e: any) {
+      setRawDataText(`Error reading storage: ${e.message}`);
+    }
   }, []);
 
   // ── Load all caches on first mount ────────────────────────────────────────
@@ -584,6 +603,12 @@ export default function App() {
               }}>
                 <Text style={s.btnText}>Connect</Text>
               </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.btn, s.btnGray]}
+                onPress={() => { loadRawData(); setShowRawData(true); }}
+              >
+                <Text style={s.btnText}>🗄 View Raw Device Data</Text>
+              </TouchableOpacity>
             </View>
           )}
 
@@ -657,6 +682,28 @@ export default function App() {
           </TouchableOpacity>
 
         </ScrollView>
+
+        {/* Raw device storage viewer (debug) */}
+        <Modal
+          visible={showRawData}
+          animationType="slide"
+          onRequestClose={() => setShowRawData(false)}
+        >
+          <SafeAreaView style={s.container}>
+            <View style={s.raceHeader}>
+              <TouchableOpacity onPress={() => setShowRawData(false)} style={s.backBtn}>
+                <Text style={s.backTxt}>← Close</Text>
+              </TouchableOpacity>
+              <Text style={s.raceMode}>Raw Device Data</Text>
+              <TouchableOpacity onPress={loadRawData} style={s.backBtn}>
+                <Text style={s.backTxt}>⟳ Refresh</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={{ flex: 1 }}>
+              <Text style={s.rawDataTxt} selectable>{rawDataText || 'Loading…'}</Text>
+            </ScrollView>
+          </SafeAreaView>
+        </Modal>
       </SafeAreaView>
     );
   }
@@ -973,4 +1020,5 @@ const s = StyleSheet.create({
   riderMeta:      { color: '#666', fontSize: 12, marginTop: 2 },
   eventBox:       { backgroundColor: '#16213e', borderRadius: 8, padding: 12, marginVertical: 6, minHeight: 48, justifyContent: 'center' },
   eventTxt:       { color: '#ccc', fontSize: 13, textAlign: 'center' },
+  rawDataTxt:     { color: '#8fd9a8', fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 11, padding: 8, lineHeight: 16 },
 });
