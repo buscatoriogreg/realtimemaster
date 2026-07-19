@@ -75,9 +75,38 @@ function sendFinishedRiders(client, stage) {
     });
 }
 
+// Every finished result across all stages/categories — for the results
+// viewer, grouped client-side by category then stage.
+function queryAllResults(cb) {
+    const sql =
+        'SELECT t.rider_id, r.rider_no, r.name, r.team, r.category, t.stage, t.diff_time ' +
+        'FROM 25_times t ' +
+        'JOIN 25_riders r ON r.id = t.rider_id ' +
+        'WHERE t.diff_time IS NOT NULL ' +
+        'ORDER BY r.category, t.stage, t.diff_time';
+    db.query(sql, (err, rows) => {
+        if (err) { console.error('all_results query error:', err.message); cb([]); return; }
+        cb(rows || []);
+    });
+}
+
+function sendAllResults(client) {
+    queryAllResults((rows) => {
+        if (client.readyState === WebSocket.OPEN)
+            client.send(JSON.stringify({ type: 'all_results', data: rows }));
+    });
+}
+
 function broadcastFinishedRiders(stage) {
     queryFinishedRiders(stage, (rows) => {
         const payload = JSON.stringify({ type: 'finished_riders', data: rows });
+        wss.clients.forEach((c) => { if (c.readyState === WebSocket.OPEN) c.send(payload); });
+    });
+}
+
+function broadcastAllResults() {
+    queryAllResults((rows) => {
+        const payload = JSON.stringify({ type: 'all_results', data: rows });
         wss.clients.forEach((c) => { if (c.readyState === WebSocket.OPEN) c.send(payload); });
     });
 }
@@ -170,6 +199,10 @@ wss.on('connection', (ws) => {
 
                 case 'get_finished_riders':
                     sendFinishedRiders(ws, data.stage);
+                    break;
+
+                case 'get_all_results':
+                    sendAllResults(ws);
                     break;
 
                 case 'update_rider':
@@ -319,6 +352,7 @@ wss.on('connection', (ws) => {
                                                 [data.stage, data.category],
                                                 (err, resultRace) => {
                                                     broadcastFinishedRiders(data.stage);
+                                                    broadcastAllResults();
                                                     if (err) { console.error('race_result error:', err.message); return; }
                                                     // Send to ALL clients (broadcast)
                                                     wss.clients.forEach((client) => {

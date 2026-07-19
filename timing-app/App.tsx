@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View, Text, TouchableOpacity, FlatList, StyleSheet, Alert,
   PermissionsAndroid, Platform, StatusBar, SafeAreaView, ScrollView, Modal,
@@ -17,6 +17,8 @@ type FinishEntry      = { timestamp: string };
 type OnTrackEntry     = { key: string; riderId: number; name: string; stage: number; startTs: number };
 type FinishedRider    = { riderId: number; stage: number; diffTime: string };
 type DropItem         = { label: string; value: string };
+type AllResult        = { riderId: number; riderNo: string; name: string; team: string; category: string; stage: number; diffTime: string };
+type ResultSection    = { key: string; category: string; stage: number; rows: AllResult[] };
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -25,6 +27,7 @@ const RIDERS_KEY    = '@timing_riders';
 const CATS_KEY      = '@timing_categories';
 const STAGE_CNT_KEY = '@timing_stage_count';
 const ONTRACK_KEY   = '@timing_on_track';
+const ALL_RESULTS_KEY = '@timing_all_results';
 const RECONNECT_MS  = 4000;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -150,6 +153,8 @@ export default function App() {
   const [nowTick, setNowTick]          = useState(Date.now());
   const [showRawData, setShowRawData]  = useState(false);
   const [rawDataText, setRawDataText]  = useState('');
+  const [allResults, setAllResults]    = useState<AllResult[]>([]);
+  const [showResults, setShowResults]  = useState(false);
 
   const ws              = useRef<WebSocket | null>(null);
   const btDevice        = useRef<any>(null);
@@ -238,6 +243,20 @@ export default function App() {
       return a.start_order - b.start_order;
     });
 
+  // Results grouped by category then stage — each group is every rider who
+  // has finished that stage within that category, in server finish order.
+  const resultSections: ResultSection[] = useMemo(() => {
+    const map = new Map<string, ResultSection>();
+    allResults.forEach(r => {
+      const category = r.category || 'Unassigned';
+      const key = `${category}__${r.stage}`;
+      if (!map.has(key)) map.set(key, { key, category, stage: r.stage, rows: [] });
+      map.get(key)!.rows.push(r);
+    });
+    return Array.from(map.values()).sort((a, b) =>
+      a.category === b.category ? a.stage - b.stage : a.category.localeCompare(b.category));
+  }, [allResults]);
+
   const filteredRiders = searchQuery.trim()
     ? baseRiders.filter(r =>
         String(r.name ?? '').toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -286,6 +305,11 @@ export default function App() {
     AsyncStorage.setItem(CATS_KEY, JSON.stringify(cats)).catch(() => {});
   }, []);
 
+  const cacheAllResults = useCallback((data: AllResult[]) => {
+    setAllResults(data);
+    AsyncStorage.setItem(ALL_RESULTS_KEY, JSON.stringify(data)).catch(() => {});
+  }, []);
+
   // ── Raw on-device storage viewer (debug) ──────────────────────────────────
 
   const loadRawData = useCallback(async () => {
@@ -306,13 +330,14 @@ export default function App() {
   // ── Load all caches on first mount ────────────────────────────────────────
 
   useEffect(() => {
-    AsyncStorage.multiGet([RIDERS_KEY, CATS_KEY, STAGE_CNT_KEY, QUEUE_KEY, ONTRACK_KEY])
-      .then(([[, rRaw], [, cRaw], [, sRaw], [, qRaw], [, tRaw]]) => {
+    AsyncStorage.multiGet([RIDERS_KEY, CATS_KEY, STAGE_CNT_KEY, QUEUE_KEY, ONTRACK_KEY, ALL_RESULTS_KEY])
+      .then(([[, rRaw], [, cRaw], [, sRaw], [, qRaw], [, tRaw], [, aRaw]]) => {
         if (rRaw) { const r = JSON.parse(rRaw); setRiders(r); setRidersSync('cached'); }
         if (cRaw)   setCategories(JSON.parse(cRaw));
         if (sRaw)   setStageCount(parseInt(sRaw) || 10);
         if (qRaw)   setPending(JSON.parse(qRaw).length);
         if (tRaw)   setOnTrack(JSON.parse(tRaw));
+        if (aRaw)   setAllResults(JSON.parse(aRaw));
       }).catch(() => {});
   }, []);
 
@@ -324,6 +349,7 @@ export default function App() {
     socket.send('get_category_list');
     socket.send(JSON.stringify({ action: 'get_data' }));
     socket.send(JSON.stringify({ action: 'get_riders_on_track' }));
+    socket.send(JSON.stringify({ action: 'get_all_results' }));
   };
 
   const connectWs = useCallback(() => {
@@ -390,6 +416,19 @@ export default function App() {
               cacheCategories(d.data.map((c: any) => c.category_name));
             }
             break;
+          case 'all_results':
+            if (Array.isArray(d.data)) {
+              cacheAllResults(d.data.map((r: any) => ({
+                riderId: Number(r.rider_id),
+                riderNo: r.rider_no ?? '',
+                name: r.name ?? '',
+                team: r.team ?? '',
+                category: r.category ?? '',
+                stage: Number(r.stage),
+                diffTime: r.diff_time ?? '',
+              })));
+            }
+            break;
           case 'result_race_setting': {
             const stage = d.data?.stage ?? 1;
             setSettings({ stage, category: d.data?.category ?? '' });
@@ -429,7 +468,7 @@ export default function App() {
         reconnectTimer.current = setTimeout(connectWs, RECONNECT_MS);
     };
     ws.current = socket;
-  }, [flushQueue, cacheRiders, cacheCategories]);
+  }, [flushQueue, cacheRiders, cacheCategories, cacheAllResults]);
 
   // ── Stage / category change (updates local + broadcasts if connected) ──────
 
@@ -675,6 +714,17 @@ export default function App() {
           </View>
 
           <TouchableOpacity
+            style={[s.btn, s.btnRefresh, { marginTop: 10 }]}
+            onPress={() => {
+              if (ws.current?.readyState === WebSocket.OPEN)
+                ws.current.send(JSON.stringify({ action: 'get_all_results' }));
+              setShowResults(true);
+            }}
+          >
+            <Text style={s.btnText}>🏆 Results by Category & Stage</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
             style={[s.btn, s.btnAccent, { marginTop: 12, marginBottom: 32 }]}
             onPress={() => { setScreen('bt'); loadPairedDevices(); }}
           >
@@ -682,6 +732,50 @@ export default function App() {
           </TouchableOpacity>
 
         </ScrollView>
+
+        {/* Results viewer — every finish, grouped by category then stage */}
+        <Modal
+          visible={showResults}
+          animationType="slide"
+          onRequestClose={() => setShowResults(false)}
+        >
+          <SafeAreaView style={s.container}>
+            <View style={s.raceHeader}>
+              <TouchableOpacity onPress={() => setShowResults(false)} style={s.backBtn}>
+                <Text style={s.backTxt}>← Close</Text>
+              </TouchableOpacity>
+              <Text style={s.raceMode}>Results</Text>
+              <TouchableOpacity
+                onPress={() => ws.current?.readyState === WebSocket.OPEN &&
+                  ws.current.send(JSON.stringify({ action: 'get_all_results' }))}
+                style={s.backBtn}
+              >
+                <Text style={s.backTxt}>⟳ Refresh</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={{ flex: 1 }}>
+              {resultSections.length === 0 && (
+                <Text style={s.muted}>No results yet.</Text>
+              )}
+              {resultSections.map(section => (
+                <View key={section.key} style={s.resultCard}>
+                  <Text style={s.resultCardTitle}>
+                    {section.category} · Stage {section.stage}
+                  </Text>
+                  {section.rows.map((r, i) => (
+                    <View key={r.riderId} style={s.resultRow}>
+                      <Text style={s.resultRank}>{i + 1}</Text>
+                      <Text style={s.resultName}>
+                        #{r.riderNo}  {r.name}
+                      </Text>
+                      <Text style={s.resultTime}>{formatFinishTime(r.diffTime)}</Text>
+                    </View>
+                  ))}
+                </View>
+              ))}
+            </ScrollView>
+          </SafeAreaView>
+        </Modal>
 
         {/* Raw device storage viewer (debug) */}
         <Modal
@@ -1021,4 +1115,10 @@ const s = StyleSheet.create({
   eventBox:       { backgroundColor: '#16213e', borderRadius: 8, padding: 12, marginVertical: 6, minHeight: 48, justifyContent: 'center' },
   eventTxt:       { color: '#ccc', fontSize: 13, textAlign: 'center' },
   rawDataTxt:     { color: '#8fd9a8', fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 11, padding: 8, lineHeight: 16 },
+  resultCard:     { backgroundColor: '#16213e', borderRadius: 10, padding: 12, marginBottom: 10 },
+  resultCardTitle:{ color: '#4aa3df', fontSize: 13, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 },
+  resultRow:      { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
+  resultRank:     { color: '#666', fontSize: 12, width: 20, textAlign: 'right' },
+  resultName:     { flex: 1, color: '#fff', fontSize: 14 },
+  resultTime:     { color: '#4caf50', fontSize: 14, fontWeight: '700', fontVariant: ['tabular-nums'] },
 });
