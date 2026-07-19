@@ -633,15 +633,21 @@ export default function App() {
             )}
           </View>
 
-          {/* Pending offline events */}
-          {pendingCount > 0 && (
-            <View style={s.offlineBanner}>
-              <Text style={s.offlineTxt}>
-                📦 {pendingCount} event{pendingCount !== 1 ? 's' : ''} queued offline
-                {wsConnected ? ' — will sync automatically' : ''}
-              </Text>
-            </View>
-          )}
+          {/* Sync bar */}
+          <View style={s.syncBar}>
+            <Text style={s.syncBarTxt}>
+              {isSyncing
+                ? '⏳ Syncing…'
+                : `📦 ${pendingCount} offline${wsConnected ? '' : ' · no server'}`}
+            </Text>
+            <TouchableOpacity
+              style={[s.syncNowBtn, (!wsConnected || isSyncing) && s.syncNowBtnDisabled]}
+              disabled={!wsConnected || isSyncing}
+              onPress={() => ws.current && flushQueue(ws.current)}
+            >
+              <Text style={s.syncNowTxt}>Sync now</Text>
+            </TouchableOpacity>
+          </View>
 
           <TouchableOpacity
             style={[s.btn, s.btnAccent, { marginTop: 12, marginBottom: 32 }]}
@@ -912,8 +918,6 @@ const s = StyleSheet.create({
   cacheRow:       { gap: 4 },
   cacheItem:      { color: '#ccc', fontSize: 13 },
   cacheWarn:      { color: '#f0a500', fontSize: 12, marginTop: 8 },
-  offlineBanner:  { backgroundColor: '#2a1f08', borderRadius: 8, padding: 10, marginTop: 10 },
-  offlineTxt:     { color: '#f0a500', fontSize: 13, textAlign: 'center' },
   backBtn:        { marginBottom: 8 },
   backTxt:        { color: '#e94560', fontSize: 15 },
   deviceItem:     { backgroundColor: '#16213e', borderRadius: 8, padding: 14, marginBottom: 8 },
