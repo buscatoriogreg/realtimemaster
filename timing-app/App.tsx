@@ -19,6 +19,8 @@ type FinishedRider    = { riderId: number; stage: number; diffTime: string };
 type DropItem         = { label: string; value: string };
 type AllResult        = { riderId: number; riderNo: string; name: string; team: string; category: string; stage: number; diffTime: string };
 type ResultSection    = { key: string; category: string; stage: number; rows: AllResult[] };
+type LogEntry         = { id: string; riderId: number; riderNo: string; name: string; category: string; stage: number; type: 'start' | 'finish'; timestamp: string; loggedAt: string };
+type LogSection       = { key: string; category: string; stage: number; rows: LogEntry[] };
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -28,6 +30,7 @@ const CATS_KEY      = '@timing_categories';
 const STAGE_CNT_KEY = '@timing_stage_count';
 const ONTRACK_KEY   = '@timing_on_track';
 const ALL_RESULTS_KEY = '@timing_all_results';
+const LOG_KEY        = '@timing_event_log';
 const RECONNECT_MS  = 4000;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -155,6 +158,8 @@ export default function App() {
   const [rawDataText, setRawDataText]  = useState('');
   const [allResults, setAllResults]    = useState<AllResult[]>([]);
   const [showResults, setShowResults]  = useState(false);
+  const [eventLog, setEventLog]        = useState<LogEntry[]>([]);
+  const [showLog, setShowLog]          = useState(false);
 
   const ws              = useRef<WebSocket | null>(null);
   const btDevice        = useRef<any>(null);
@@ -257,6 +262,23 @@ export default function App() {
       a.category === b.category ? a.stage - b.stage : a.category.localeCompare(b.category));
   }, [allResults]);
 
+  // Raw on-device log — every start/finish this phone actually recorded,
+  // grouped by category then stage, in the order it happened locally.
+  // Independent of server results: reflects exactly what was logged here,
+  // even for events still sitting in the offline queue.
+  const logSections: LogSection[] = useMemo(() => {
+    const map = new Map<string, LogSection>();
+    eventLog.forEach(e => {
+      const category = e.category || 'Unassigned';
+      const key = `${category}__${e.stage}`;
+      if (!map.has(key)) map.set(key, { key, category, stage: e.stage, rows: [] });
+      map.get(key)!.rows.push(e);
+    });
+    map.forEach(sec => sec.rows.sort((a, b) => a.timestamp.localeCompare(b.timestamp)));
+    return Array.from(map.values()).sort((a, b) =>
+      a.category === b.category ? a.stage - b.stage : a.category.localeCompare(b.category));
+  }, [eventLog]);
+
   const filteredRiders = searchQuery.trim()
     ? baseRiders.filter(r =>
         String(r.name ?? '').toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -310,6 +332,32 @@ export default function App() {
     AsyncStorage.setItem(ALL_RESULTS_KEY, JSON.stringify(data)).catch(() => {});
   }, []);
 
+  // ── Raw on-device event log — permanent record of every start/finish this
+  // phone captured, independent of sync status (unlike the offline queue,
+  // which is wiped once its events reach the server). ─────────────────────
+
+  const appendLog = useCallback((entry: Omit<LogEntry, 'id' | 'loggedAt'>) => {
+    setEventLog(prev => {
+      const next = [...prev, {
+        ...entry,
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        loggedAt: new Date().toISOString(),
+      }];
+      AsyncStorage.setItem(LOG_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  }, []);
+
+  const clearLog = useCallback(() => {
+    Alert.alert('Clear device log?', 'This removes the permanent record of raw start/finish times captured on this phone. This cannot be undone.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Clear', style: 'destructive', onPress: () => {
+        setEventLog([]);
+        AsyncStorage.removeItem(LOG_KEY).catch(() => {});
+      }},
+    ]);
+  }, []);
+
   // ── Raw on-device storage viewer (debug) ──────────────────────────────────
 
   const loadRawData = useCallback(async () => {
@@ -330,14 +378,15 @@ export default function App() {
   // ── Load all caches on first mount ────────────────────────────────────────
 
   useEffect(() => {
-    AsyncStorage.multiGet([RIDERS_KEY, CATS_KEY, STAGE_CNT_KEY, QUEUE_KEY, ONTRACK_KEY, ALL_RESULTS_KEY])
-      .then(([[, rRaw], [, cRaw], [, sRaw], [, qRaw], [, tRaw], [, aRaw]]) => {
+    AsyncStorage.multiGet([RIDERS_KEY, CATS_KEY, STAGE_CNT_KEY, QUEUE_KEY, ONTRACK_KEY, ALL_RESULTS_KEY, LOG_KEY])
+      .then(([[, rRaw], [, cRaw], [, sRaw], [, qRaw], [, tRaw], [, aRaw], [, lRaw]]) => {
         if (rRaw) { const r = JSON.parse(rRaw); setRiders(r); setRidersSync('cached'); }
         if (cRaw)   setCategories(JSON.parse(cRaw));
         if (sRaw)   setStageCount(parseInt(sRaw) || 10);
         if (qRaw)   setPending(JSON.parse(qRaw).length);
         if (tRaw)   setOnTrack(JSON.parse(tRaw));
         if (aRaw)   setAllResults(JSON.parse(aRaw));
+        if (lRaw)   setEventLog(JSON.parse(lRaw));
       }).catch(() => {});
   }, []);
 
@@ -560,6 +609,10 @@ export default function App() {
     const key = `${rider.id}-${rs.stage}`;
     pendingStarts.current[key] = live.current.onTrack.find(e => e.key === key) ?? null;
     addToTrack(rider, startDate.getTime(), rs.stage);
+    appendLog({
+      riderId: rider.id, riderNo: rider.rider_no, name: rider.name,
+      category: rider.category, stage: rs.stage, type: 'start', timestamp,
+    });
   };
 
   const assignFinish = useCallback((rider: Rider) => {
@@ -583,7 +636,11 @@ export default function App() {
       ...prev.filter(e => !(e.riderId === rider.id && e.stage === rs.stage)),
       { riderId: rider.id, stage: rs.stage, diffTime: formatFinishTime(pf.timestamp) },
     ]);
-  }, [enqueue]);
+    appendLog({
+      riderId: rider.id, riderNo: rider.rider_no, name: rider.name,
+      category: rs.category || rider.category, stage: rs.stage, type: 'finish', timestamp: pf.timestamp,
+    });
+  }, [enqueue, appendLog]);
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -725,6 +782,13 @@ export default function App() {
           </TouchableOpacity>
 
           <TouchableOpacity
+            style={[s.btn, s.btnGray, { marginTop: 8 }]}
+            onPress={() => setShowLog(true)}
+          >
+            <Text style={s.btnText}>🕒 Device Log ({eventLog.length} raw times)</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
             style={[s.btn, s.btnAccent, { marginTop: 12, marginBottom: 32 }]}
             onPress={() => { setScreen('bt'); loadPairedDevices(); }}
           >
@@ -769,6 +833,49 @@ export default function App() {
                         #{r.riderNo}  {r.name}
                       </Text>
                       <Text style={s.resultTime}>{formatFinishTime(r.diffTime)}</Text>
+                    </View>
+                  ))}
+                </View>
+              ))}
+            </ScrollView>
+          </SafeAreaView>
+        </Modal>
+
+        {/* Device log — raw start/finish timestamps this phone recorded,
+            grouped by category then stage, independent of server results. */}
+        <Modal
+          visible={showLog}
+          animationType="slide"
+          onRequestClose={() => setShowLog(false)}
+        >
+          <SafeAreaView style={s.container}>
+            <View style={s.raceHeader}>
+              <TouchableOpacity onPress={() => setShowLog(false)} style={s.backBtn}>
+                <Text style={s.backTxt}>← Close</Text>
+              </TouchableOpacity>
+              <Text style={s.raceMode}>Device Log</Text>
+              <TouchableOpacity onPress={clearLog} style={s.backBtn}>
+                <Text style={s.backTxt}>🗑 Clear</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={{ flex: 1 }}>
+              {logSections.length === 0 && (
+                <Text style={s.muted}>No start/finish events recorded on this device yet.</Text>
+              )}
+              {logSections.map(section => (
+                <View key={section.key} style={s.resultCard}>
+                  <Text style={s.resultCardTitle}>
+                    {section.category} · Stage {section.stage}
+                  </Text>
+                  {section.rows.map(r => (
+                    <View key={r.id} style={s.resultRow}>
+                      <Text style={[s.logType, r.type === 'start' ? s.logTypeStart : s.logTypeFinish]}>
+                        {r.type === 'start' ? '🚦' : '🏁'}
+                      </Text>
+                      <Text style={s.resultName}>
+                        #{r.riderNo}  {r.name}
+                      </Text>
+                      <Text style={s.resultTime}>{formatFinishTime(r.timestamp)}</Text>
                     </View>
                   ))}
                 </View>
@@ -1121,4 +1228,7 @@ const s = StyleSheet.create({
   resultRank:     { color: '#666', fontSize: 12, width: 20, textAlign: 'right' },
   resultName:     { flex: 1, color: '#fff', fontSize: 14 },
   resultTime:     { color: '#4caf50', fontSize: 14, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  logType:        { fontSize: 14, width: 20, textAlign: 'center' },
+  logTypeStart:   { color: '#4caf50' },
+  logTypeFinish:  { color: '#e94560' },
 });
