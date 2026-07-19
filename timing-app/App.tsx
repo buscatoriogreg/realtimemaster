@@ -717,18 +717,20 @@ export default function App() {
       </View>
 
       {/* Sync bar */}
-      {pendingCount > 0 && (
-        <View style={s.syncBar}>
-          <Text style={s.syncBarTxt}>
-            {isSyncing ? '⏳ Syncing…' : `📦 ${pendingCount} offline${wsConnected ? '' : ' · no server'}`}
-          </Text>
-          {wsConnected && !isSyncing && (
-            <TouchableOpacity style={s.syncNowBtn} onPress={() => ws.current && flushQueue(ws.current)}>
-              <Text style={s.syncNowTxt}>Sync now</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      )}
+      <View style={s.syncBar}>
+        <Text style={s.syncBarTxt}>
+          {isSyncing
+            ? '⏳ Syncing…'
+            : `📦 ${pendingCount} offline${wsConnected ? '' : ' · no server'}`}
+        </Text>
+        <TouchableOpacity
+          style={[s.syncNowBtn, (!wsConnected || isSyncing) && s.syncNowBtnDisabled]}
+          disabled={!wsConnected || isSyncing}
+          onPress={() => ws.current && flushQueue(ws.current)}
+        >
+          <Text style={s.syncNowTxt}>Sync now</Text>
+        </TouchableOpacity>
+      </View>
 
       {/* FINISH — beam hit banner */}
       {hasBeam && (
@@ -929,6 +931,7 @@ const s = StyleSheet.create({
   syncBar:        { flexDirection: 'row', alignItems: 'center', backgroundColor: '#2a1f08', borderRadius: 8, padding: 10, marginBottom: 4, gap: 8 },
   syncBarTxt:     { flex: 1, color: '#f0a500', fontSize: 12 },
   syncNowBtn:     { backgroundColor: '#f0a500', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6 },
+  syncNowBtnDisabled: { backgroundColor: '#5a4a20', opacity: 0.6 },
   syncNowTxt:     { color: '#1a1a2e', fontSize: 12, fontWeight: '700' },
   beamBanner:     { flexDirection: 'row', alignItems: 'center', backgroundColor: '#2a1e00', borderWidth: 2, borderColor: '#f0a500', borderRadius: 10, padding: 12, marginBottom: 6 },
   beamTime:       { color: '#f0a500', fontSize: 16, fontWeight: '700', letterSpacing: 0.5 },
