@@ -31,6 +31,7 @@ const STAGE_CNT_KEY = '@timing_stage_count';
 const ONTRACK_KEY   = '@timing_on_track';
 const ALL_RESULTS_KEY = '@timing_all_results';
 const LOG_KEY        = '@timing_event_log';
+const PRINTER_KEY    = '@timing_printer_addr';
 const RECONNECT_MS  = 4000;
 // Heartbeat: a WebSocket can report readyState === OPEN long after the
 // connection is actually dead (half-open TCP on a flaky race-site network).
@@ -87,6 +88,59 @@ function formatFinishTime(ts: string): string {
 function formatClock(ts: string): string {
   const t = ts.includes('T') ? ts.split('T')[1] : ts.includes(' ') ? ts.split(' ')[1] : ts;
   return t.replace('Z', '').split('.')[0];
+}
+
+// ── ESC/POS receipt slips (58 mm roll = 32 columns) ───────────────────────────
+// A printed slip is the one backup that survives phone loss, app removal and
+// server failure entirely. Every control byte below is < 0x80, so the payload
+// writes cleanly as 'ascii' — no base64/Buffer polyfill needed.
+
+const PRINT_COLS = 32;
+const ESC = '\x1B', GS = '\x1D';
+const P_INIT   = `${ESC}@`;
+const P_CENTER = `${ESC}a\x01`;
+const P_LEFT   = `${ESC}a\x00`;
+const P_BIG    = `${ESC}!\x30`;   // double width + height
+const P_NORMAL = `${ESC}!\x00`;
+const P_CUT    = `${GS}V\x00`;    // ignored harmlessly by cutter-less printers
+
+// Thermal heads render ASCII only — drop anything they'd print as garbage.
+function ascii(v: unknown): string {
+  return String(v ?? '').replace(/[^\x20-\x7E]/g, '');
+}
+
+// 'LABEL value', wrapped to the paper width with continuation lines indented.
+function slipRow(label: string, value: unknown): string {
+  const prefix = label.padEnd(6);
+  const avail  = PRINT_COLS - prefix.length;
+  const v = ascii(value);
+  if (v.length <= avail) return prefix + v + '\n';
+  const out = [prefix + v.slice(0, avail)];
+  for (let i = avail; i < v.length; i += avail)
+    out.push(' '.repeat(prefix.length) + v.slice(i, i + avail));
+  return out.join('\n') + '\n';
+}
+
+function buildSlip(e: { type: 'start' | 'finish'; riderNo: string; name: string;
+                        category: string; stage: number; timestamp: string }): string {
+  const rule = '='.repeat(PRINT_COLS);
+  const thin = '-'.repeat(PRINT_COLS);
+  const [date, time] = e.timestamp.includes(' ')
+    ? e.timestamp.split(' ') : ['', e.timestamp];
+  return P_INIT + P_CENTER +
+    rule + '\n' + 'RACE TIMING\n' +
+    P_BIG + (e.type === 'start' ? 'START' : 'FINISH') + '\n' + P_NORMAL +
+    rule + '\n' + P_LEFT +
+    slipRow('BIB', `#${ascii(e.riderNo)}`) +
+    slipRow('NAME', e.name) +
+    slipRow('CAT', e.category) +
+    slipRow('STAGE', e.stage) +
+    thin + '\n' +
+    slipRow('TIME', time) +
+    slipRow('DATE', date) +
+    rule + '\n' +
+    P_CENTER + 'retain as official record\n' + P_LEFT +
+    '\n\n\n' + P_CUT;
 }
 
 // ── Inline Dropdown ───────────────────────────────────────────────────────────
@@ -180,10 +234,14 @@ export default function App() {
   const [showLog, setShowLog]          = useState(false);
   const [queueItems, setQueueItems]    = useState<QueuedEvent[]>([]);
   const [showQueue, setShowQueue]      = useState(false);
+  const [printerConn, setPrinterConn]  = useState(false);
+  const [printerName, setPrinterName]  = useState('');
 
   const ws              = useRef<WebSocket | null>(null);
   const btDevice        = useRef<any>(null);
   const btSub           = useRef<any>(null);
+  const printerDevice   = useRef<any>(null);
+  const printLock       = useRef<Promise<unknown>>(Promise.resolve());
   const wsUrlRef        = useRef(wsUrl);
   const reconnectTimer  = useRef<ReturnType<typeof setTimeout> | null>(null);
   const shouldReconnect = useRef(false);
@@ -719,6 +777,56 @@ export default function App() {
     btDevice.current = null; setBtConn(false);
   };
 
+  // ── Receipt printer ───────────────────────────────────────────────────────
+  // A second Bluetooth Classic connection alongside the beam sensor. Printing
+  // is strictly best-effort: a printer that is absent, jammed, out of paper or
+  // disconnected must never delay or fail a timing capture.
+
+  const connectPrinter = useCallback(async (device: any, silent = false) => {
+    try {
+      await device.connect();
+      printerDevice.current = device;
+      setPrinterConn(true);
+      setPrinterName(device.name || device.address);
+      AsyncStorage.setItem(PRINTER_KEY, device.address).catch(() => {});
+    } catch (e: any) {
+      if (!silent) Alert.alert('Printer connection failed', e.message);
+    }
+  }, []);
+
+  const disconnectPrinter = useCallback(async () => {
+    try { await printerDevice.current?.disconnect(); } catch {}
+    printerDevice.current = null;
+    setPrinterConn(false); setPrinterName('');
+    AsyncStorage.removeItem(PRINTER_KEY).catch(() => {});
+  }, []);
+
+  // Fire-and-forget. Writes are serialized through a lock so two slips can
+  // never interleave on the paper, and every failure is swallowed — the
+  // capture is already recorded in the outbox and device log by this point.
+  const printSlip = useCallback((e: Parameters<typeof buildSlip>[0]) => {
+    if (!printerDevice.current) return;
+    const run = printLock.current.then(async () => {
+      try { await printerDevice.current?.write(buildSlip(e), 'ascii'); }
+      catch { setPrinterConn(false); }
+    });
+    printLock.current = run.catch(() => {});
+  }, []);
+
+  // Reconnect the saved printer on launch so the operator need not re-pair it
+  // before every stage.
+  useEffect(() => {
+    (async () => {
+      try {
+        const addr = await AsyncStorage.getItem(PRINTER_KEY);
+        if (!addr) return;
+        const bonded = await RNBluetoothClassic.getBondedDevices();
+        const dev = bonded.find((d: any) => d.address === addr);
+        if (dev) await connectPrinter(dev, true);
+      } catch {}
+    })();
+  }, [connectPrinter]);
+
   // ── Beam break ────────────────────────────────────────────────────────────
 
   const handleBeamBreak = () => {
@@ -764,6 +872,10 @@ export default function App() {
       riderId: rider.id, riderNo: rider.rider_no, name: rider.name,
       category: rider.category, stage: rs.stage, type: 'start', timestamp,
     });
+    printSlip({
+      type: 'start', riderNo: rider.rider_no, name: rider.name,
+      category: rider.category, stage: rs.stage, timestamp,
+    });
   };
 
   const assignFinish = useCallback((rider: Rider) => {
@@ -795,7 +907,11 @@ export default function App() {
       riderId: rider.id, riderNo: rider.rider_no, name: rider.name,
       category: rs.category || rider.category, stage: rs.stage, type: 'finish', timestamp: pf.timestamp,
     });
-  }, [outboxAdd, appendLog]);
+    printSlip({
+      type: 'finish', riderNo: rider.rider_no, name: rider.name,
+      category: rs.category || rider.category, stage: rs.stage, timestamp: pf.timestamp,
+    });
+  }, [outboxAdd, appendLog, printSlip]);
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -1144,16 +1260,49 @@ export default function App() {
           <Text style={s.backTxt}>← Back</Text>
         </TouchableOpacity>
         <Text style={s.title}>Connect Bluetooth</Text>
-        <Text style={s.muted}>Pair HC-05/HC-06 in Android Settings first.</Text>
+        <Text style={s.muted}>Pair the beam sensor and receipt printer in Android Settings first.</Text>
+
+        {/* Printer status — the operator must be able to see at a glance
+            whether slips are still being produced. */}
+        <View style={[s.printBar, printerConn ? s.printBarOn : s.printBarOff]}>
+          <Text style={s.printBarTxt}>
+            {printerConn ? `🖨 Printer: ${printerName}` : '🖨 No printer connected'}
+          </Text>
+          {printerConn && (
+            <>
+              <TouchableOpacity
+                style={s.printBarBtn}
+                onPress={() => printSlip({
+                  type: 'start', riderNo: '000', name: 'TEST PRINT',
+                  category: 'TEST', stage: 0, timestamp: toMysqlDatetime(new Date()),
+                })}
+              >
+                <Text style={s.printBarBtnTxt}>Test</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.printBarBtn} onPress={disconnectPrinter}>
+                <Text style={s.printBarBtnTxt}>Disconnect</Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
+
         <TouchableOpacity style={s.btn} onPress={loadPairedDevices}>
           <Text style={s.btnText}>Refresh Paired Devices</Text>
         </TouchableOpacity>
         <FlatList data={btDevices} keyExtractor={i => i.address} style={{ marginTop: 12 }}
           renderItem={({ item }) => (
-            <TouchableOpacity style={s.deviceItem} onPress={() => connectToBt(item)}>
-              <Text style={s.deviceName}>{item.name || 'Unknown'}</Text>
-              <Text style={s.deviceAddr}>{item.address}</Text>
-            </TouchableOpacity>
+            <View style={s.deviceItem}>
+              <View style={{ flex: 1 }}>
+                <Text style={s.deviceName}>{item.name || 'Unknown'}</Text>
+                <Text style={s.deviceAddr}>{item.address}</Text>
+              </View>
+              <TouchableOpacity style={s.devBtn} onPress={() => connectToBt(item)}>
+                <Text style={s.devBtnTxt}>⚡ Beam</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.devBtn, s.devBtnPrint]} onPress={() => connectPrinter(item)}>
+                <Text style={s.devBtnTxt}>🖨 Printer</Text>
+              </TouchableOpacity>
+            </View>
           )}
           ListEmptyComponent={<Text style={s.muted}>No paired devices found.</Text>}
         />
@@ -1210,6 +1359,9 @@ export default function App() {
         >
           <Text style={s.syncNowTxt}>Sync now</Text>
         </TouchableOpacity>
+        <Text style={printerConn ? s.printDotOn : s.printDotOff}>
+          {printerConn ? '🖨' : '🖨✕'}
+        </Text>
       </View>
 
       {/* FINISH — beam hit banner */}
@@ -1394,7 +1546,18 @@ const s = StyleSheet.create({
   cacheWarn:      { color: '#f0a500', fontSize: 12, marginTop: 8 },
   backBtn:        { marginBottom: 8 },
   backTxt:        { color: '#e94560', fontSize: 15 },
-  deviceItem:     { backgroundColor: '#16213e', borderRadius: 8, padding: 14, marginBottom: 8 },
+  deviceItem:     { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#16213e', borderRadius: 8, padding: 14, marginBottom: 8 },
+  devBtn:         { backgroundColor: '#0f3460', borderRadius: 6, paddingVertical: 8, paddingHorizontal: 10 },
+  devBtnPrint:    { backgroundColor: '#2d4a22' },
+  devBtnTxt:      { color: '#fff', fontSize: 12, fontWeight: '600' },
+  printBar:       { flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 8, padding: 10, marginTop: 10 },
+  printBarOn:     { backgroundColor: '#14301b' },
+  printBarOff:    { backgroundColor: '#2a1f08' },
+  printBarTxt:    { flex: 1, color: '#cfd8dc', fontSize: 12 },
+  printBarBtn:    { backgroundColor: '#0f3460', borderRadius: 6, paddingVertical: 6, paddingHorizontal: 10 },
+  printBarBtnTxt: { color: '#fff', fontSize: 12, fontWeight: '600' },
+  printDotOn:     { color: '#4caf50', fontSize: 14 },
+  printDotOff:    { color: '#666', fontSize: 14 },
   deviceName:     { color: '#fff', fontSize: 16, fontWeight: '600' },
   deviceAddr:     { color: '#888', fontSize: 12, marginTop: 2 },
   // Race
