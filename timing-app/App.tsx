@@ -71,6 +71,13 @@ function formatFinishTime(ts: string): string {
   return ts.includes(' ') ? ts.split(' ')[1] : ts;
 }
 
+// Time-of-day HH:MM:SS from either a MySQL datetime ('… 14:25:44.123') or an
+// ISO string ('…T14:25:44.123Z'). Used for the offline queue's "saved" stamp.
+function formatClock(ts: string): string {
+  const t = ts.includes('T') ? ts.split('T')[1] : ts.includes(' ') ? ts.split(' ')[1] : ts;
+  return t.replace('Z', '').split('.')[0];
+}
+
 // ── Inline Dropdown ───────────────────────────────────────────────────────────
 
 function Dropdown({ label, items, value, onChange, disabled = false }: {
@@ -160,6 +167,8 @@ export default function App() {
   const [showResults, setShowResults]  = useState(false);
   const [eventLog, setEventLog]        = useState<LogEntry[]>([]);
   const [showLog, setShowLog]          = useState(false);
+  const [queueItems, setQueueItems]    = useState<QueuedEvent[]>([]);
+  const [showQueue, setShowQueue]      = useState(false);
 
   const ws              = useRef<WebSocket | null>(null);
   const btDevice        = useRef<any>(null);
@@ -279,6 +288,28 @@ export default function App() {
       a.category === b.category ? a.stage - b.stage : a.category.localeCompare(b.category));
   }, [eventLog]);
 
+  // Offline queue as human-readable rows — join each raw payload back to a
+  // rider (by id) so the pending list shows bib/name, not just ids. Kept in
+  // queue order (the order events were captured while offline).
+  const queueRows = useMemo(() => {
+    const byId = new Map(riders.map(r => [r.id, r]));
+    return queueItems.map(q => {
+      const p = q.payload as Record<string, any>;
+      const rider = byId.get(p.rider_id);
+      const isStart = p.action === 'insert_start_time';
+      return {
+        id: q.id,
+        type: isStart ? 'start' as const : 'finish' as const,
+        riderNo: rider?.rider_no ?? `id ${p.rider_id}`,
+        name: rider?.name ?? '(unknown rider)',
+        category: p.category || rider?.category || 'Unassigned',
+        stage: p.stage,
+        time: (isStart ? p.start_time : p.stop_time) as string,
+        savedAt: q.savedAt,
+      };
+    });
+  }, [queueItems, riders]);
+
   const filteredRiders = searchQuery.trim()
     ? baseRiders.filter(r =>
         String(r.name ?? '').toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -301,6 +332,12 @@ export default function App() {
     await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(updated));
     setPending(updated.length);
     return updated.length;
+  }, [readQueue]);
+
+  // Load the raw offline queue into state so it can be shown in a
+  // human-readable list (which start/finish events are still unsynced).
+  const loadQueue = useCallback(async () => {
+    setQueueItems(await readQueue());
   }, [readQueue]);
 
   const flushQueue = useCallback(async (socket: WebSocket) => {
@@ -789,6 +826,13 @@ export default function App() {
           </TouchableOpacity>
 
           <TouchableOpacity
+            style={[s.btn, s.btnGray, { marginTop: 8 }]}
+            onPress={() => { loadQueue(); setShowQueue(true); }}
+          >
+            <Text style={s.btnText}>📦 Offline Queue ({pendingCount} pending)</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
             style={[s.btn, s.btnAccent, { marginTop: 12, marginBottom: 32 }]}
             onPress={() => { setScreen('bt'); loadPairedDevices(); }}
           >
@@ -880,6 +924,62 @@ export default function App() {
                   ))}
                 </View>
               ))}
+            </ScrollView>
+          </SafeAreaView>
+        </Modal>
+
+        {/* Offline queue — start/finish events captured while disconnected
+            that have NOT yet reached the server, in the order they happened. */}
+        <Modal
+          visible={showQueue}
+          animationType="slide"
+          onRequestClose={() => setShowQueue(false)}
+        >
+          <SafeAreaView style={s.container}>
+            <View style={s.raceHeader}>
+              <TouchableOpacity onPress={() => setShowQueue(false)} style={s.backBtn}>
+                <Text style={s.backTxt}>← Close</Text>
+              </TouchableOpacity>
+              <Text style={s.raceMode}>Offline Queue</Text>
+              <TouchableOpacity onPress={loadQueue} style={s.backBtn}>
+                <Text style={s.backTxt}>⟳ Refresh</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={{ flex: 1 }}>
+              {queueRows.length === 0 ? (
+                <Text style={s.muted}>Nothing pending — all captured events have synced to the server.</Text>
+              ) : (
+                <>
+                  <Text style={[s.muted, { paddingHorizontal: 12, paddingTop: 12 }]}>
+                    {queueRows.length} event{queueRows.length !== 1 ? 's' : ''} waiting to sync
+                    {wsConnected ? '' : ' · no server connection'}
+                  </Text>
+                  <View style={s.resultCard}>
+                    {queueRows.map(r => (
+                      <View key={r.id} style={s.queueRow}>
+                        <Text style={[s.logType, r.type === 'start' ? s.logTypeStart : s.logTypeFinish]}>
+                          {r.type === 'start' ? '🚦' : '🏁'}
+                        </Text>
+                        <View style={{ flex: 1 }}>
+                          <Text style={s.resultName}>#{r.riderNo}  {r.name}</Text>
+                          <Text style={s.queueMeta}>
+                            {r.category} · Stage {r.stage} · saved {formatClock(r.savedAt)}
+                          </Text>
+                        </View>
+                        <Text style={s.resultTime}>{formatFinishTime(r.time)}</Text>
+                      </View>
+                    ))}
+                  </View>
+                  {wsConnected && (
+                    <TouchableOpacity
+                      style={[s.btn, s.btnRefresh, { margin: 12 }]}
+                      onPress={() => { if (ws.current) flushQueue(ws.current).then(loadQueue); }}
+                    >
+                      <Text style={s.btnText}>⬆️  Sync now</Text>
+                    </TouchableOpacity>
+                  )}
+                </>
+              )}
             </ScrollView>
           </SafeAreaView>
         </Modal>
@@ -1231,4 +1331,6 @@ const s = StyleSheet.create({
   logType:        { fontSize: 14, width: 20, textAlign: 'center' },
   logTypeStart:   { color: '#4caf50' },
   logTypeFinish:  { color: '#e94560' },
+  queueRow:       { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#233' },
+  queueMeta:      { color: '#888', fontSize: 12, marginTop: 2 },
 });
