@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View, Text, TouchableOpacity, FlatList, StyleSheet, Alert,
-  PermissionsAndroid, Platform, StatusBar, SafeAreaView, ScrollView, Modal,
+  PermissionsAndroid, Platform, StatusBar, SafeAreaView, ScrollView, Modal, Share,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import RNBluetoothClassic from 'react-native-bluetooth-classic';
@@ -19,7 +19,7 @@ type FinishedRider    = { riderId: number; stage: number; diffTime: string };
 type DropItem         = { label: string; value: string };
 type AllResult        = { riderId: number; riderNo: string; name: string; team: string; category: string; stage: number; diffTime: string };
 type ResultSection    = { key: string; category: string; stage: number; rows: AllResult[] };
-type LogEntry         = { id: string; riderId: number; riderNo: string; name: string; category: string; stage: number; type: 'start' | 'finish'; timestamp: string; loggedAt: string };
+type LogEntry         = { id: string; riderId: number; riderNo: string; name: string; category: string; stage: number; type: 'start' | 'finish' | 'beam'; timestamp: string; loggedAt: string };
 type LogSection       = { key: string; category: string; stage: number; rows: LogEntry[] };
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
@@ -392,6 +392,23 @@ export default function App() {
     AsyncStorage.setItem(LOG_KEY, JSON.stringify(eventLog)).catch(() => {});
   }, [eventLog]);
 
+  // Export the whole log as CSV via the OS share sheet — the operator can
+  // save a permanent copy to Drive / email / Files that survives even an
+  // app uninstall (AsyncStorage does not). No native filesystem dep needed.
+  const exportLog = useCallback(async () => {
+    if (eventLog.length === 0) { Alert.alert('Nothing to export', 'The device log is empty.'); return; }
+    const esc = (v: string | number) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const header = 'type,rider_no,name,category,stage,timestamp,logged_at';
+    const rows = eventLog.map(e =>
+      [e.type, e.riderNo, e.name, e.category, e.stage, e.timestamp, e.loggedAt].map(esc).join(','));
+    const csv = [header, ...rows].join('\n');
+    try {
+      await Share.share({ title: `Device Log ${new Date().toISOString()}`, message: csv });
+    } catch (err: any) {
+      Alert.alert('Export failed', err?.message ?? 'Could not open the share sheet.');
+    }
+  }, [eventLog]);
+
   const clearLog = useCallback(() => {
     Alert.alert('Clear device log?', 'This removes the permanent record of raw start/finish times captured on this phone. This cannot be undone.', [
       { text: 'Cancel', style: 'cancel' },
@@ -635,6 +652,12 @@ export default function App() {
     if (m === 'finish') {
       setPendingFins(prev => [...prev, { timestamp }]);
       setLastEvent(`⚡ Beam at ${timestamp} — tap the finisher`);
+      // Record the raw sensor time immediately — a permanent capture that
+      // survives even if the operator never assigns (or mis-assigns) a rider.
+      appendLog({
+        riderId: 0, riderNo: '', name: 'raw finish beam — unassigned',
+        category: rs.category || 'Unassigned', stage: rs.stage, type: 'beam', timestamp,
+      });
       return;
     }
 
@@ -910,6 +933,11 @@ export default function App() {
               </TouchableOpacity>
             </View>
             <ScrollView style={{ flex: 1 }}>
+              {eventLog.length > 0 && (
+                <TouchableOpacity style={[s.btn, s.btnRefresh, { margin: 12 }]} onPress={exportLog}>
+                  <Text style={s.btnText}>⬆️  Export CSV ({eventLog.length} rows)</Text>
+                </TouchableOpacity>
+              )}
               {logSections.length === 0 && (
                 <Text style={s.muted}>No start/finish events recorded on this device yet.</Text>
               )}
@@ -920,11 +948,12 @@ export default function App() {
                   </Text>
                   {section.rows.map(r => (
                     <View key={r.id} style={s.resultRow}>
-                      <Text style={[s.logType, r.type === 'start' ? s.logTypeStart : s.logTypeFinish]}>
-                        {r.type === 'start' ? '🚦' : '🏁'}
+                      <Text style={[s.logType,
+                        r.type === 'start' ? s.logTypeStart : r.type === 'beam' ? s.logTypeBeam : s.logTypeFinish]}>
+                        {r.type === 'start' ? '🚦' : r.type === 'beam' ? '⚡' : '🏁'}
                       </Text>
-                      <Text style={s.resultName}>
-                        #{r.riderNo}  {r.name}
+                      <Text style={[s.resultName, r.type === 'beam' && s.resultNameBeam]}>
+                        {r.type === 'beam' ? r.name : `#${r.riderNo}  ${r.name}`}
                       </Text>
                       <Text style={s.resultTime}>{formatFinishTime(r.timestamp)}</Text>
                     </View>
@@ -1338,6 +1367,8 @@ const s = StyleSheet.create({
   logType:        { fontSize: 14, width: 20, textAlign: 'center' },
   logTypeStart:   { color: '#4caf50' },
   logTypeFinish:  { color: '#e94560' },
+  logTypeBeam:    { color: '#e0a800' },
+  resultNameBeam: { color: '#c9a227', fontStyle: 'italic' },
   queueRow:       { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#233' },
   queueMeta:      { color: '#888', fontSize: 12, marginTop: 2 },
 });
