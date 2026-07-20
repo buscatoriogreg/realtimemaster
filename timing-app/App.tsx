@@ -374,16 +374,23 @@ export default function App() {
   // which is wiped once its events reach the server). ─────────────────────
 
   const appendLog = useCallback((entry: Omit<LogEntry, 'id' | 'loggedAt'>) => {
-    setEventLog(prev => {
-      const next = [...prev, {
-        ...entry,
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        loggedAt: new Date().toISOString(),
-      }];
-      AsyncStorage.setItem(LOG_KEY, JSON.stringify(next)).catch(() => {});
-      return next;
-    });
+    setEventLog(prev => [...prev, {
+      ...entry,
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      loggedAt: new Date().toISOString(),
+    }]);
   }, []);
+
+  // Persist the device log via a hydration-guarded effect (same race-free
+  // pattern as onTrack). Doing it inside the setEventLog updater fired a
+  // separate setItem per append, so rapid finishes raced concurrent writes
+  // to the same key — a stale, shorter array could land last and truncate
+  // (or wipe) the log after restart. One effect = one atomic write per change.
+  const logHydrated = useRef(false);
+  useEffect(() => {
+    if (!logHydrated.current) { logHydrated.current = true; return; }
+    AsyncStorage.setItem(LOG_KEY, JSON.stringify(eventLog)).catch(() => {});
+  }, [eventLog]);
 
   const clearLog = useCallback(() => {
     Alert.alert('Clear device log?', 'This removes the permanent record of raw start/finish times captured on this phone. This cannot be undone.', [
