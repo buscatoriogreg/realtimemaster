@@ -340,8 +340,11 @@ wss.on('connection', (ws) => {
                     break;
 
                 case 'insert_stop_time': // insert stop time of the rider
-                    db.query('update 25_times set stop_time=? where (rider_id=? and stage=?) and stop_time is NULL limit 1',
-                        [data.stop_time, data.rider_id, data.stage],
+                    // The guard `? > start_time` is enforced in SQL so a stale or
+                    // mis-assigned beam can never be stored. Writing the timestamp
+                    // verbatim is what produced negative diff_time in results.
+                    db.query('update 25_times set stop_time=? where (rider_id=? and stage=?) and stop_time is NULL and start_time is not NULL and ? > start_time limit 1',
+                        [data.stop_time, data.rider_id, data.stage, data.stop_time],
                         (err, result) => {
                             if (err) {
                                 // Send to ALL clients (broadcast)
@@ -353,17 +356,51 @@ wss.on('connection', (ws) => {
                                     }
                                 });
                                 console.log(err.message);
+                                return;   // no ack — let the device retry
                             }
-                            else {
-                                // No error means the update reached its final state:
-                                // either it just applied, or stop_time was already set
-                                // by an earlier attempt of this same event. Retrying
-                                // can never change that, so confirm delivery now.
-                                ackEvent(ws, data.event_id);
 
-                                if (result.affectedRows === 0) {
-                                    console.log("stop_time is not null. No rows were updated");
-                                }
+                            if (result.affectedRows === 0) {
+                                // Nothing applied. Find out why, so we ack only when
+                                // retrying could never succeed.
+                                db.query('select start_time, stop_time from 25_times where rider_id=? and stage=? limit 1',
+                                    [data.rider_id, data.stage], (e2, r2) => {
+                                        if (e2) { console.error(e2.message); return; }
+
+                                        const reply = (message) => {
+                                            if (ws.readyState === WebSocket.OPEN) {
+                                                ws.send(JSON.stringify({
+                                                    type: 'error', action: 'insert_stop_time',
+                                                    rider_id: data.rider_id, stage: data.stage, message
+                                                }));
+                                            }
+                                        };
+
+                                        // No start on record yet. The start may still be in
+                                        // flight from the other device, so do NOT ack — the
+                                        // retry succeeds once it lands, and it stays visible
+                                        // in the device's Unconfirmed list meanwhile.
+                                        if (!r2.length) {
+                                            reply('No start time yet for this rider/stage — will retry.');
+                                            return;
+                                        }
+                                        // Already finished by an earlier attempt: idempotent.
+                                        if (r2[0].stop_time !== null) {
+                                            ackEvent(ws, data.event_id);
+                                            return;
+                                        }
+                                        // Start exists and stop_time is still NULL, so this
+                                        // timestamp failed the > start_time guard. Deterministic
+                                        // — replaying identical data can never pass, so ack it
+                                        // and surface the rejection to the operator.
+                                        ackEvent(ws, data.event_id);
+                                        reply('Rejected: finish time is not after the start time.');
+                                        console.log('Rejected out-of-order stop for rider ' + data.rider_id + ' stage ' + data.stage);
+                                    });
+                                return;
+                            }
+
+                            // Applied cleanly — confirm delivery, then run the follow-ups.
+                            ackEvent(ws, data.event_id);
 
                                 db.query('delete from riders_on_track where rider_id=? and stage=? limit 1',
                                     [data.rider_id, data.stage], (err, results) => {
@@ -397,10 +434,6 @@ wss.on('connection', (ws) => {
                                                 });
                                         }
                                     });
-
-
-
-                            }
                         });
                     break;
             }
