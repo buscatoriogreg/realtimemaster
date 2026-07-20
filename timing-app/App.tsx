@@ -32,8 +32,19 @@ const ONTRACK_KEY   = '@timing_on_track';
 const ALL_RESULTS_KEY = '@timing_all_results';
 const LOG_KEY        = '@timing_event_log';
 const RECONNECT_MS  = 4000;
+// Heartbeat: a WebSocket can report readyState === OPEN long after the
+// connection is actually dead (half-open TCP on a flaky race-site network).
+// Without this, sends silently vanish and the event is never queued.
+const HEARTBEAT_MS      = 5000;
+const HEARTBEAT_DEAD_MS = 15000;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+// Stable per-capture id. Travels with the payload so the server can confirm
+// that exact event, and stays the same across retries so replays dedupe.
+function newEventId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
 
 // Device local time with milliseconds — e.g. '2026-06-03 02:25:44.123'
 function toMysqlDatetime(d: Date): string {
@@ -323,31 +334,60 @@ export default function App() {
     catch { return []; }
   }, []);
 
-  const enqueue = useCallback(async (payload: Record<string, unknown>) => {
-    const queue   = await readQueue();
-    const updated = [...queue, {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      payload, savedAt: new Date().toISOString(),
-    }];
-    await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(updated));
-    setPending(updated.length);
-    return updated.length;
-  }, [readQueue]);
+  // Every outbox mutation is a read-modify-write on one key, so they must be
+  // serialized. Two captures a few ms apart would otherwise both read the same
+  // snapshot and the second write would drop the first — the same race that
+  // emptied the device log.
+  const outboxLock = useRef<Promise<unknown>>(Promise.resolve());
+  const withOutbox = useCallback(<T,>(fn: () => Promise<T>): Promise<T> => {
+    const run = outboxLock.current.then(fn, fn);
+    outboxLock.current = run.catch(() => {});
+    return run;
+  }, []);
 
-  // Load the raw offline queue into state so it can be shown in a
-  // human-readable list (which start/finish events are still unsynced).
+  // Persist a capture BEFORE it is sent, always — online or offline. Nothing
+  // is ever entrusted to the socket alone, so a dead connection costs a retry
+  // instead of a rider's time.
+  const outboxAdd = useCallback((payload: Record<string, unknown>) =>
+    withOutbox(async () => {
+      const queue   = await readQueue();
+      const updated = [...queue, {
+        id: String(payload.event_id), payload, savedAt: new Date().toISOString(),
+      }];
+      await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(updated));
+      setPending(updated.length);
+      setQueueItems(updated);
+      return updated.length;
+    }), [withOutbox, readQueue]);
+
+  // Drop a capture only once the server has confirmed that exact event.
+  const outboxRemove = useCallback((eventId: string) =>
+    withOutbox(async () => {
+      const queue   = await readQueue();
+      const updated = queue.filter(e => e.id !== eventId);
+      if (updated.length === queue.length) return queue.length;
+      await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(updated));
+      setPending(updated.length);
+      setQueueItems(updated);
+      return updated.length;
+    }), [withOutbox, readQueue]);
+
   const loadQueue = useCallback(async () => {
     setQueueItems(await readQueue());
   }, [readQueue]);
 
-  const flushQueue = useCallback(async (socket: WebSocket) => {
+  // Re-send everything still unconfirmed. Never deletes — only an ack does.
+  // Safe to call repeatedly: 25_times is uniquely keyed on (rider_id, stage),
+  // so a replay cannot create a duplicate row.
+  const sendOutbox = useCallback(async (socket: WebSocket | null) => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
     const queue = await readQueue();
     if (!queue.length) return;
     setSyncing(true);
-    for (const e of queue) socket.send(JSON.stringify(e.payload));
-    await AsyncStorage.removeItem(QUEUE_KEY);
-    setPending(0); setSyncing(false);
-    setLastEvent(`✅ Synced ${queue.length} offline event${queue.length !== 1 ? 's' : ''}`);
+    for (const e of queue) {
+      try { socket.send(JSON.stringify(e.payload)); } catch {}
+    }
+    setSyncing(false);
   }, [readQueue]);
 
   // ── Persist riders / categories to AsyncStorage for offline use ───────────
@@ -462,6 +502,33 @@ export default function App() {
     socket.send(JSON.stringify({ action: 'get_all_results' }));
   };
 
+  // ── Heartbeat ─────────────────────────────────────────────────────────────
+
+  const hbTimer  = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastPong = useRef(Date.now());
+
+  const stopHeartbeat = useCallback(() => {
+    if (hbTimer.current) { clearInterval(hbTimer.current); hbTimer.current = null; }
+  }, []);
+
+  const startHeartbeat = useCallback((socket: WebSocket) => {
+    stopHeartbeat();
+    lastPong.current = Date.now();
+    hbTimer.current = setInterval(() => {
+      if (socket.readyState !== WebSocket.OPEN) return;
+      // Nothing has come back for too long: the socket claims OPEN but is dead.
+      // Force it closed so onclose runs the normal reconnect path, and captures
+      // stop being handed to a black hole.
+      if (Date.now() - lastPong.current > HEARTBEAT_DEAD_MS) {
+        try { socket.close(); } catch {}
+        return;
+      }
+      try { socket.send(JSON.stringify({ action: 'ping', timestamp: Date.now() })); } catch {}
+      // Piggyback the retry sweep — anything unconfirmed goes again.
+      sendOutbox(socket);
+    }, HEARTBEAT_MS);
+  }, [stopHeartbeat, sendOutbox]);
+
   const connectWs = useCallback(() => {
     if (reconnectTimer.current) { clearTimeout(reconnectTimer.current); reconnectTimer.current = null; }
     ws.current?.close();
@@ -470,13 +537,21 @@ export default function App() {
     socket.onopen = () => {
       setWsConn(true);
       requestAllData(socket);
-      flushQueue(socket);
+      sendOutbox(socket);
+      startHeartbeat(socket);
     };
 
     socket.onmessage = ({ data: raw }) => {
       try {
         const d = JSON.parse(raw);
         switch (d.type) {
+          // Delivery confirmed for one capture — it is now safe to forget.
+          case 'ack':
+            if (d.event_id) outboxRemove(String(d.event_id));
+            break;
+          case 'pong':
+            lastPong.current = Date.now();
+            break;
           case 'riders_data':
             cacheRiders(d.data);
             break;
@@ -573,12 +648,14 @@ export default function App() {
     socket.onerror = () => setWsConn(false);
     socket.onclose = () => {
       if (ws.current !== socket) return;
+      stopHeartbeat();
       setWsConn(false);
       if (shouldReconnect.current)
         reconnectTimer.current = setTimeout(connectWs, RECONNECT_MS);
     };
     ws.current = socket;
-  }, [flushQueue, cacheRiders, cacheCategories, cacheAllResults]);
+  }, [sendOutbox, startHeartbeat, stopHeartbeat, outboxRemove,
+      cacheRiders, cacheCategories, cacheAllResults]);
 
   // ── Stage / category change (updates local + broadcasts if connected) ──────
 
@@ -663,14 +740,21 @@ export default function App() {
 
     if (!rider) { Alert.alert('No rider selected', 'Select a rider before the beam.'); return; }
     const payload: Record<string, unknown> = {
-      action: 'insert_start_time', rider_id: rider.id, stage: rs.stage, start_time: timestamp,
+      action: 'insert_start_time', event_id: newEventId(),
+      rider_id: rider.id, stage: rs.stage, start_time: timestamp,
     };
-    if (ws.current?.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify(payload));
-      setLastEvent(`🚦 START  #${rider.rider_no} ${rider.name}  @ ${timestamp}`);
-    } else {
-      enqueue(payload).then(n => setLastEvent(`📦 Offline (${n}): 🚦 #${rider.rider_no} ${rider.name}`));
-    }
+    // Persist first, then send. Ordering matters: the add must be on the outbox
+    // chain before an ack can try to remove it, or the entry would be re-added
+    // after its own confirmation and retried forever.
+    outboxAdd(payload).then(n => {
+      const socket = ws.current;
+      if (socket?.readyState === WebSocket.OPEN) {
+        try { socket.send(JSON.stringify(payload)); } catch {}
+        setLastEvent(`🚦 START  #${rider.rider_no} ${rider.name}  @ ${timestamp}`);
+      } else {
+        setLastEvent(`📦 Saved (${n}): 🚦 #${rider.rider_no} ${rider.name}`);
+      }
+    });
     // Remember what this optimistic start overwrites so it can be undone if the
     // server rejects it (duplicate start) — without restarting a running clock.
     const key = `${rider.id}-${rs.stage}`;
@@ -687,15 +771,19 @@ export default function App() {
     if (!pf) return;
     const rs = live.current.raceSettings;
     const payload: Record<string, unknown> = {
-      action: 'insert_stop_time', rider_id: rider.id,
+      action: 'insert_stop_time', event_id: newEventId(), rider_id: rider.id,
       stage: rs.stage, category: rs.category || rider.category, stop_time: pf.timestamp,
     };
-    if (ws.current?.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify(payload));
-      setLastEvent(`🏁 FINISH  #${rider.rider_no} ${rider.name}  @ ${pf.timestamp}`);
-    } else {
-      enqueue(payload).then(n => setLastEvent(`📦 Offline (${n}): 🏁 #${rider.rider_no} ${rider.name}`));
-    }
+    // Persist first, then send — see the note in handleBeamBreak.
+    outboxAdd(payload).then(n => {
+      const socket = ws.current;
+      if (socket?.readyState === WebSocket.OPEN) {
+        try { socket.send(JSON.stringify(payload)); } catch {}
+        setLastEvent(`🏁 FINISH  #${rider.rider_no} ${rider.name}  @ ${pf.timestamp}`);
+      } else {
+        setLastEvent(`📦 Saved (${n}): 🏁 #${rider.rider_no} ${rider.name}`);
+      }
+    });
     setPendingFins(prev => prev.slice(1));
     setSelected(rider);
     // Optimistic: show finish timestamp immediately; server will replace with diff_time.
@@ -707,7 +795,7 @@ export default function App() {
       riderId: rider.id, riderNo: rider.rider_no, name: rider.name,
       category: rs.category || rider.category, stage: rs.stage, type: 'finish', timestamp: pf.timestamp,
     });
-  }, [enqueue, appendLog]);
+  }, [outboxAdd, appendLog]);
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -717,10 +805,11 @@ export default function App() {
     return () => {
       shouldReconnect.current = false;
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+      stopHeartbeat();
       ws.current?.close();
       btSub.current?.remove();
     };
-  }, [connectWs]);
+  }, [connectWs, stopHeartbeat]);
 
   // ── SETUP SCREEN ──────────────────────────────────────────────────────────
 
@@ -826,12 +915,12 @@ export default function App() {
             <Text style={s.syncBarTxt}>
               {isSyncing
                 ? '⏳ Syncing…'
-                : `📦 ${pendingCount} offline${wsConnected ? '' : ' · no server'}`}
+                : `📦 ${pendingCount} unconfirmed${wsConnected ? '' : ' · no server'}`}
             </Text>
             <TouchableOpacity
               style={[s.syncNowBtn, (!wsConnected || isSyncing) && s.syncNowBtnDisabled]}
               disabled={!wsConnected || isSyncing}
-              onPress={() => ws.current && flushQueue(ws.current)}
+              onPress={() => sendOutbox(ws.current)}
             >
               <Text style={s.syncNowTxt}>Sync now</Text>
             </TouchableOpacity>
@@ -859,7 +948,7 @@ export default function App() {
             style={[s.btn, s.btnGray, { marginTop: 8 }]}
             onPress={() => { loadQueue(); setShowQueue(true); }}
           >
-            <Text style={s.btnText}>📦 Offline Queue ({pendingCount} pending)</Text>
+            <Text style={s.btnText}>📦 Unconfirmed ({pendingCount} awaiting server)</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -976,18 +1065,19 @@ export default function App() {
               <TouchableOpacity onPress={() => setShowQueue(false)} style={s.backBtn}>
                 <Text style={s.backTxt}>← Close</Text>
               </TouchableOpacity>
-              <Text style={s.raceMode}>Offline Queue</Text>
+              <Text style={s.raceMode}>Unconfirmed</Text>
               <TouchableOpacity onPress={loadQueue} style={s.backBtn}>
                 <Text style={s.backTxt}>⟳ Refresh</Text>
               </TouchableOpacity>
             </View>
             <ScrollView style={{ flex: 1 }}>
               {queueRows.length === 0 ? (
-                <Text style={s.muted}>Nothing pending — all captured events have synced to the server.</Text>
+                <Text style={s.muted}>All captured events have been confirmed by the server.</Text>
               ) : (
                 <>
                   <Text style={[s.muted, { paddingHorizontal: 12, paddingTop: 12 }]}>
-                    {queueRows.length} event{queueRows.length !== 1 ? 's' : ''} waiting to sync
+                    {queueRows.length} event{queueRows.length !== 1 ? 's' : ''} not yet confirmed by the
+                    server — retried automatically every {HEARTBEAT_MS / 1000}s
                     {wsConnected ? '' : ' · no server connection'}
                   </Text>
                   <View style={s.resultCard}>
@@ -1009,7 +1099,7 @@ export default function App() {
                   {wsConnected && (
                     <TouchableOpacity
                       style={[s.btn, s.btnRefresh, { margin: 12 }]}
-                      onPress={() => { if (ws.current) flushQueue(ws.current).then(loadQueue); }}
+                      onPress={() => { sendOutbox(ws.current).then(loadQueue); }}
                     >
                       <Text style={s.btnText}>⬆️  Sync now</Text>
                     </TouchableOpacity>
@@ -1111,12 +1201,12 @@ export default function App() {
         <Text style={s.syncBarTxt}>
           {isSyncing
             ? '⏳ Syncing…'
-            : `📦 ${pendingCount} offline${wsConnected ? '' : ' · no server'}`}
+            : `📦 ${pendingCount} unconfirmed${wsConnected ? '' : ' · no server'}`}
         </Text>
         <TouchableOpacity
           style={[s.syncNowBtn, (!wsConnected || isSyncing) && s.syncNowBtnDisabled]}
           disabled={!wsConnected || isSyncing}
-          onPress={() => ws.current && flushQueue(ws.current)}
+          onPress={() => sendOutbox(ws.current)}
         >
           <Text style={s.syncNowTxt}>Sync now</Text>
         </TouchableOpacity>

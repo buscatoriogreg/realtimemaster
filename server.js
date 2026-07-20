@@ -125,6 +125,17 @@ function broadcastOnTrack() {
     });
 }
 
+// Confirm delivery of a single timing event back to the device that sent it.
+// The device keeps every capture in a persistent outbox and only deletes it
+// once this ack arrives, so a dropped/half-open socket costs a retry rather
+// than a lost rider time. Retries are safe: 25_times has a unique key on
+// (rider_id, stage), so a replay can never create a duplicate row.
+function ackEvent(ws, eventId) {
+    if (!eventId) return;               // legacy client — nothing to confirm
+    if (ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'ack', event_id: eventId }));
+}
+
 wss.on('connection', (ws) => {
     console.log('Client connected');
 
@@ -138,15 +149,16 @@ wss.on('connection', (ws) => {
             switch (data.action) {
 
                 case 'ping': // ping pong
-                    console.log('Send Pong to: '+data.from+' - '+data.timestamp);
-                    wss.clients.forEach((client) => {
-                        if (client.readyState === WebSocket.OPEN) {
-                            client.send(JSON.stringify({
-                                type: 'pong',
-                                message: 'Ping received from: ' + data.from + ' Timestamp: ' + data.timestamp + ' Stage: ' + data.stage + ' Category: ' + data.category
-                            }));
-                        }
-                    });
+                    // Reply ONLY to the sender. Broadcasting the pong let one
+                    // device's ping satisfy every other device's heartbeat,
+                    // masking a dead/half-open socket — the exact condition
+                    // that silently dropped timing events.
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({
+                            type: 'pong',
+                            timestamp: data.timestamp,
+                        }));
+                    }
                 break;
 
                 case 'verify':
@@ -257,6 +269,13 @@ wss.on('connection', (ws) => {
                         [data.rider_id, data.stage, data.start_time],
                         (err, result) => {
                             if (err) {
+                                // A duplicate means this rider/stage start is already
+                                // stored — the write succeeded, possibly on an earlier
+                                // attempt of this same event. Ack it so the device stops
+                                // retrying; without this a replayed start would be
+                                // retried forever against the unique key.
+                                if (err.code === 'ER_DUP_ENTRY') ackEvent(ws, data.event_id);
+
                                 // Reply only to the device that sent the start, and
                                 // identify the rider/stage, so it can undo its
                                 // optimistic clock on a duplicate without disturbing
@@ -274,6 +293,11 @@ wss.on('connection', (ws) => {
                                 console.log(err.message);
                             }
                             else {
+                                // Row is committed — confirm to the sender before any
+                                // of the follow-up broadcasts, so delivery is recorded
+                                // even if a later query fails.
+                                ackEvent(ws, data.event_id);
+
                                 db.query('SELECT * FROM 25_riders WHERE id = ? limit 1', [data.rider_id], (err, results) => {
                                     if (err) {
                                         console.error("Query error:", err);
@@ -331,6 +355,12 @@ wss.on('connection', (ws) => {
                                 console.log(err.message);
                             }
                             else {
+                                // No error means the update reached its final state:
+                                // either it just applied, or stop_time was already set
+                                // by an earlier attempt of this same event. Retrying
+                                // can never change that, so confirm delivery now.
+                                ackEvent(ws, data.event_id);
+
                                 if (result.affectedRows === 0) {
                                     console.log("stop_time is not null. No rows were updated");
                                 }
