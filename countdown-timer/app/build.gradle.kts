@@ -13,12 +13,12 @@ val releaseKeyPassword: String? = System.getenv("RELEASE_KEY_PASSWORD")
 
 android {
     namespace = "com.realtimermaster.countdowntimer"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.realtimermaster.countdowntimer"
         minSdk = 24
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 2
         versionName = "1.0"
     }
